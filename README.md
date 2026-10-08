@@ -2,6 +2,10 @@
 
 TabTab is a modern, interactive web application that brings standard thermodynamic property tables into the digital age. Built with React and Tailwind CSS, it offers a fast, user-friendly interface for engineers, researchers, and students to quickly find and analyze thermodynamic properties.
 
+
+## AI Transparency:
+- This project was entirely driven by AI Agents. Gemini 3.8 Flash, Claude Opus 5.5, and Gemini 3.1 Pro produced all of the code and architecture. I cannot guarantee the stability nor the security of the code. 
+
 ## Features
 
 - **Interactive Property Tables:** View properties for Saturated, Superheated, Compressed, and Ideal Gas states.
