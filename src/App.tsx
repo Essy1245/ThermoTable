@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import ReactDOM from 'react-dom';
 import { SUPPORTED_TABLES } from './data/tablesMeta';
 import { getTableData } from './data/tables';
@@ -65,6 +65,137 @@ const TOOLTIPS: Record<string, string> = {
   's': 'Entropy (kJ/kg·K): Specific entropy.',
 };
 
+const SubHeader = React.memo(function SubHeader({
+  label,
+  prop,
+  colId,
+  isCategoryEnd,
+  isHovered,
+  isSelected,
+  onToggleHighlight,
+  onMouseEnterCol,
+  onMouseLeaveCol,
+  onShowTooltip,
+  onHideTooltip,
+}: {
+  label: string;
+  prop: string;
+  colId: string;
+  isCategoryEnd?: boolean;
+  isHovered: boolean;
+  isSelected: boolean;
+  onToggleHighlight: (colId: string) => void;
+  onMouseEnterCol: (colId: string) => void;
+  onMouseLeaveCol: () => void;
+  onShowTooltip: (text: string, e: React.MouseEvent) => void;
+  onHideTooltip: () => void;
+}) {
+  return (
+    <th 
+      className={cn(
+        "px-2 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-14 transition-colors h-10 select-none whitespace-nowrap cursor-pointer",
+        isSelected 
+          ? "z-30 bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" 
+          : (isHovered ? "z-20 bg-red-50 dark:bg-gray-800 text-red-900 dark:text-red-300" : "z-10"),
+        isCategoryEnd ? "border-r-2 border-r-gray-300 dark:border-r-gray-700" : "border-r border-r-gray-200/60 dark:border-r-gray-800/80"
+      )}
+      onClick={() => onToggleHighlight(colId)}
+      onMouseEnter={() => onMouseEnterCol(colId)}
+      onMouseLeave={onMouseLeaveCol}
+      title={isSelected ? "Remove highlight" : `Highlight ${label} column`}
+    >
+      <div className="flex items-center justify-between gap-1.5 w-full">
+        <div className="flex items-center gap-1 min-w-0">
+          <span className="truncate">{label}</span>
+          {TOOLTIPS[prop] && (
+            <Info
+              className="w-3 h-3 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help shrink-0"
+              onClick={(e) => { e.stopPropagation(); }}
+              onMouseEnter={(e) => onShowTooltip(TOOLTIPS[prop], e)}
+              onMouseLeave={onHideTooltip}
+            />
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onToggleHighlight(colId);
+          }}
+          className={cn(
+            "p-1 rounded transition-colors shrink-0 cursor-pointer",
+            isSelected 
+              ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" 
+              : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-200 dark:hover:bg-gray-800"
+          )}
+          title={isSelected ? "Remove highlight" : "Highlight column"}
+        >
+          <Highlighter className="w-3 h-3" />
+        </button>
+      </div>
+    </th>
+  );
+});
+
+const Td = React.memo(function Td({
+  children,
+  colId,
+  isRowHovered,
+  isPinned,
+  isHighlighted,
+  isCategoryEnd,
+  isColHovered,
+  isColSelected,
+  onMouseEnterCol,
+  onMouseLeaveCol,
+}: {
+  children: React.ReactNode;
+  colId: string;
+  isRowHovered: boolean;
+  isPinned: boolean;
+  isHighlighted?: boolean;
+  isCategoryEnd?: boolean;
+  isColHovered: boolean;
+  isColSelected: boolean;
+  onMouseEnterCol: (id: string) => void;
+  onMouseLeaveCol: () => void;
+}) {
+  let bgStyle = "";
+  if (isHighlighted) {
+    bgStyle = "bg-indigo-200/90 text-indigo-950 dark:bg-indigo-900/80 dark:text-indigo-100 font-bold relative z-10 ring-1 ring-indigo-400 dark:ring-indigo-400";
+  } else if (isPinned && isColSelected) {
+    bgStyle = "bg-amber-300 text-amber-950 dark:bg-amber-500/40 dark:text-amber-100 font-bold ring-1 ring-amber-400 dark:ring-amber-400";
+  } else if (isPinned) {
+    bgStyle = isColHovered 
+      ? "bg-amber-200/90 text-amber-950 dark:bg-amber-900/80 dark:text-amber-100 font-semibold" 
+      : "bg-amber-100/90 text-amber-950 dark:bg-amber-950/70 dark:text-amber-200 font-semibold";
+  } else if (isColSelected) {
+    bgStyle = isRowHovered 
+      ? "bg-red-200/90 text-red-950 dark:bg-red-900/70 dark:text-red-100 font-medium" 
+      : "bg-red-100/70 text-red-950 dark:bg-red-950/60 dark:text-red-200";
+  } else if (isRowHovered && isColHovered) {
+    bgStyle = "bg-red-100/60 dark:bg-gray-800 text-gray-900 dark:text-gray-100";
+  } else if (isRowHovered) {
+    bgStyle = "bg-red-50/50 dark:bg-gray-800/40 text-gray-900 dark:text-gray-100";
+  } else if (isColHovered) {
+    bgStyle = "bg-red-50/60 dark:bg-gray-800/50 text-gray-900 dark:text-gray-100";
+  }
+
+  return (
+    <td 
+      className={cn(
+        "px-2 sm:px-3 py-2 text-xs sm:text-sm text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 text-right transition-colors tabular-nums whitespace-nowrap",
+        isCategoryEnd ? "border-r-2 border-r-gray-300 dark:border-r-gray-700" : "border-r border-r-gray-100 dark:border-r-gray-800/80",
+        bgStyle
+      )}
+      onMouseEnter={() => onMouseEnterCol(colId)}
+      onMouseLeave={onMouseLeaveCol}
+    >
+      {children}
+    </td>
+  );
+});
+
 export default function App() {
   const [currentTableId, setCurrentTableId] = useState<string>('A-4');
   const [isSwitcherOpen, setIsSwitcherOpen] = useState<boolean>(false);
@@ -84,9 +215,13 @@ export default function App() {
   });
 
   const [tablePinnedRows, setTablePinnedRows] = useState<Record<string, Set<string>>>({});
-  const [selectedCols, setSelectedCols] = useState<Set<string>>(new Set());
+  const [tableSelectedCols, setTableSelectedCols] = useState<Record<string, Set<string>>>({});
+  const selectedCols = useMemo(() => tableSelectedCols[currentTableId] || new Set<string>(), [tableSelectedCols, currentTableId]);
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const [hoveredCol, setHoveredCol] = useState<string | null>(null);
+
+  const handleMouseEnterCol = useCallback((colId: string) => setHoveredCol(colId), []);
+  const handleMouseLeaveCol = useCallback(() => setHoveredCol(null), []);
 
   const [tablePinnedBlocks, setTablePinnedBlocks] = useState<Record<string, Set<number>>>({});
   const [tableCollapsedBlocks, setTableCollapsedBlocks] = useState<Record<string, Set<number>>>({});
@@ -161,7 +296,9 @@ export default function App() {
   };
 
   const hasActiveSelections = useMemo(() => {
-    if (selectedCols.size > 0) return true;
+    for (const s of Object.values(tableSelectedCols)) {
+      if (s && s.size > 0) return true;
+    }
     if (pinnedTemps.size > 0) return true;
     for (const s of Object.values(tablePinnedRows)) {
       if (s && s.size > 0) return true;
@@ -170,7 +307,7 @@ export default function App() {
       if (s && s.size > 0) return true;
     }
     return false;
-  }, [selectedCols, pinnedTemps, tablePinnedRows, tablePinnedBlocks]);
+  }, [tableSelectedCols, pinnedTemps, tablePinnedRows, tablePinnedBlocks]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -186,11 +323,11 @@ export default function App() {
     };
   }, [hasActiveSelections]);
 
-  const showTooltip = (text: string, e: React.MouseEvent) => {
+  const showTooltip = useCallback((text: string, e: React.MouseEvent) => {
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
     setTooltip({ text, x: rect.left + rect.width / 2, y: rect.bottom + 8 });
-  };
-  const hideTooltip = () => setTooltip(null);
+  }, []);
+  const hideTooltip = useCallback(() => setTooltip(null), []);
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -355,14 +492,15 @@ export default function App() {
     });
   };
 
-  const toggleColumnHighlight = (colId: string) => {
-    setSelectedCols(prev => {
-      const next = new Set(prev);
+  const toggleColumnHighlight = useCallback((colId: string) => {
+    setTableSelectedCols(prev => {
+      const current = prev[currentTableId] || new Set<string>();
+      const next = new Set(current);
       if (next.has(colId)) next.delete(colId);
       else next.add(colId);
-      return next;
+      return { ...prev, [currentTableId]: next };
     });
-  };
+  }, [currentTableId]);
 
   const toggleCol = (id: string) => {
     setVisibleCols(prev => ({ ...prev, [id]: !prev[id] }));
@@ -441,89 +579,6 @@ export default function App() {
     }
   };
 
-  const SubHeader = ({ label, prop, colId, isCategoryEnd }: { label: string, prop: string, colId: string, isCategoryEnd?: boolean }) => {
-    const isHovered = hoveredCol === colId;
-    const isSelected = selectedCols.has(colId);
-    return (
-      <th 
-        className={cn(
-          "px-2 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-14 transition-colors h-10 select-none whitespace-nowrap",
-          isSelected 
-            ? "z-30 bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" 
-            : (isHovered ? "z-20 bg-red-50 dark:bg-gray-800 text-red-900 dark:text-red-300" : "z-10"),
-          isCategoryEnd ? "border-r-2 border-r-gray-300 dark:border-r-gray-700" : "border-r border-r-gray-200/60 dark:border-r-gray-800/80"
-        )}
-        onMouseEnter={() => setHoveredCol(colId)}
-        onMouseLeave={() => setHoveredCol(null)}
-      >
-        <div className="flex items-center justify-between gap-1.5 w-full">
-          <div className="flex items-center gap-1 min-w-0">
-            <span className="truncate">{label}</span>
-            {TOOLTIPS[prop] && (
-              <Info
-                className="w-3 h-3 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help shrink-0"
-                onMouseEnter={(e) => showTooltip(TOOLTIPS[prop], e)}
-                onMouseLeave={hideTooltip}
-              />
-            )}
-          </div>
-          <button
-            onClick={() => toggleColumnHighlight(colId)}
-            className={cn(
-              "p-1 rounded transition-colors shrink-0 cursor-pointer",
-              isSelected 
-                ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" 
-                : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-200 dark:hover:bg-gray-800"
-            )}
-            title="Highlight column"
-          >
-            <Highlighter className="w-3 h-3" />
-          </button>
-        </div>
-      </th>
-    );
-  };
-
-  const Td = ({ children, colId, isRowHovered, isPinned, isHighlighted, isCategoryEnd }: { children: React.ReactNode, colId: string, isRowHovered: boolean, isPinned: boolean, isHighlighted?: boolean, isCategoryEnd?: boolean }) => {
-    const isColHovered = hoveredCol === colId;
-    const isColSelected = selectedCols.has(colId);
-
-    let bgStyle = "";
-    if (isHighlighted) {
-      bgStyle = "bg-indigo-200/90 text-indigo-950 dark:bg-indigo-900/80 dark:text-indigo-100 font-bold relative z-10 ring-1 ring-indigo-400 dark:ring-indigo-400";
-    } else if (isPinned && isColSelected) {
-      bgStyle = "bg-amber-300 text-amber-950 dark:bg-amber-500/40 dark:text-amber-100 font-bold ring-1 ring-amber-400 dark:ring-amber-400";
-    } else if (isPinned) {
-      bgStyle = isColHovered 
-        ? "bg-amber-200/90 text-amber-950 dark:bg-amber-900/80 dark:text-amber-100 font-semibold" 
-        : "bg-amber-100/90 text-amber-950 dark:bg-amber-950/70 dark:text-amber-200 font-semibold";
-    } else if (isColSelected) {
-      bgStyle = isRowHovered 
-        ? "bg-red-200/90 text-red-950 dark:bg-red-900/70 dark:text-red-100 font-medium" 
-        : "bg-red-100/70 text-red-950 dark:bg-red-950/60 dark:text-red-200";
-    } else if (isRowHovered && isColHovered) {
-      bgStyle = "bg-red-100/60 dark:bg-gray-800 text-gray-900 dark:text-gray-100";
-    } else if (isRowHovered) {
-      bgStyle = "bg-red-50/50 dark:bg-gray-800/40 text-gray-900 dark:text-gray-100";
-    } else if (isColHovered) {
-      bgStyle = "bg-red-50/60 dark:bg-gray-800/50 text-gray-900 dark:text-gray-100";
-    }
-
-    return (
-      <td 
-        className={cn(
-          "px-2 sm:px-3 py-2 text-xs sm:text-sm text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 text-right transition-colors tabular-nums whitespace-nowrap",
-          isCategoryEnd ? "border-r-2 border-r-gray-300 dark:border-r-gray-700" : "border-r border-r-gray-100 dark:border-r-gray-800/80",
-          bgStyle
-        )}
-        onMouseEnter={() => setHoveredCol(colId)}
-        onMouseLeave={() => setHoveredCol(null)}
-      >
-        {children}
-      </td>
-    );
-  };
-
   const renderColHeader = (id: string, label: string, unit: string, widthClass: string = "min-w-[85px]") => {
     const isSelected = selectedCols.has(id);
     const isHovered = hoveredCol === id;
@@ -532,14 +587,16 @@ export default function App() {
     return (
       <th 
         className={cn(
-          "px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 select-none transition-colors h-12 sm:h-14 whitespace-nowrap",
+          "px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 select-none transition-colors h-12 sm:h-14 whitespace-nowrap cursor-pointer",
           widthClass,
           isSelected 
             ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" 
             : (isHovered && "bg-red-50 dark:bg-gray-800 text-red-900 dark:text-red-300")
         )}
-        onMouseEnter={() => setHoveredCol(id)}
-        onMouseLeave={() => setHoveredCol(null)}
+        onClick={() => toggleColumnHighlight(id)}
+        onMouseEnter={() => handleMouseEnterCol(id)}
+        onMouseLeave={handleMouseLeaveCol}
+        title={isSelected ? "Remove highlight" : `Highlight ${label} column`}
       >
         <div className="flex flex-col justify-center h-full gap-1.5 sm:gap-2 w-full">
           <div className="flex items-center gap-1">
@@ -561,10 +618,12 @@ export default function App() {
           <div className="flex items-center justify-between w-full">
             <Info
               className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help shrink-0"
+              onClick={(e) => e.stopPropagation()}
               onMouseEnter={(e) => showTooltip(TOOLTIPS[id] || label, e)}
               onMouseLeave={hideTooltip}
             />
             <button 
+              type="button"
               onClick={(e) => { e.stopPropagation(); toggleColumnHighlight(id); }}
               className={cn(
                 "p-1 rounded transition-colors shrink-0 cursor-pointer",
@@ -572,7 +631,7 @@ export default function App() {
                   ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" 
                   : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
               )}
-              title={`Highlight ${label} column`}
+              title={isSelected ? "Remove highlight" : `Highlight ${label} column`}
             >
               <Highlighter className="w-3.5 h-3.5" />
             </button>
@@ -794,11 +853,13 @@ export default function App() {
                         <th 
                           rowSpan={2} 
                           className={cn(
-                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap", 
+                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
                             selectedCols.has('T') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'T' && "bg-red-50 dark:bg-gray-800 text-red-900 dark:text-red-300")
                           )} 
-                          onMouseEnter={() => setHoveredCol('T')} 
-                          onMouseLeave={() => setHoveredCol(null)}
+                          onClick={() => toggleColumnHighlight('T')}
+                          onMouseEnter={() => handleMouseEnterCol('T')} 
+                          onMouseLeave={handleMouseLeaveCol}
+                          title={selectedCols.has('T') ? "Remove highlight" : "Highlight Temp column"}
                         >
                           <div className="flex flex-col justify-center h-full gap-2 w-full">
                             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -815,16 +876,21 @@ export default function App() {
                             <div className="flex items-center justify-between w-full">
                               <Info
                                 className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help"
+                                onClick={(e) => e.stopPropagation()}
                                 onMouseEnter={(e) => showTooltip(TOOLTIPS['T'], e)}
                                 onMouseLeave={hideTooltip}
                               />
                               <button
-                                onClick={() => toggleColumnHighlight('T')}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleColumnHighlight('T');
+                                }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
                                   selectedCols.has('T') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
                                 )}
-                                title="Highlight Temp column"
+                                title={selectedCols.has('T') ? "Remove highlight" : "Highlight Temp column"}
                               >
                                 <Highlighter className="w-3.5 h-3.5" />
                               </button>
@@ -835,11 +901,13 @@ export default function App() {
                         <th 
                           rowSpan={2} 
                           className={cn(
-                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap", 
+                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
                             selectedCols.has('P') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'P' && "bg-red-50 dark:bg-gray-800 text-red-900 dark:text-red-300")
                           )} 
-                          onMouseEnter={() => setHoveredCol('P')} 
-                          onMouseLeave={() => setHoveredCol(null)}
+                          onClick={() => toggleColumnHighlight('P')}
+                          onMouseEnter={() => handleMouseEnterCol('P')} 
+                          onMouseLeave={handleMouseLeaveCol}
+                          title={selectedCols.has('P') ? "Remove highlight" : "Highlight Psat column"}
                         >
                           <div className="flex flex-col justify-center h-full gap-2 w-full">
                             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -857,16 +925,21 @@ export default function App() {
                             <div className="flex items-center justify-between w-full">
                               <Info
                                 className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help"
+                                onClick={(e) => e.stopPropagation()}
                                 onMouseEnter={(e) => showTooltip(TOOLTIPS['P'], e)}
                                 onMouseLeave={hideTooltip}
                               />
                               <button
-                                onClick={() => toggleColumnHighlight('P')}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleColumnHighlight('P');
+                                }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
                                   selectedCols.has('P') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
                                 )}
-                                title="Highlight Psat column"
+                                title={selectedCols.has('P') ? "Remove highlight" : "Highlight Psat column"}
                               >
                                 <Highlighter className="w-3.5 h-3.5" />
                               </button>
@@ -879,11 +952,13 @@ export default function App() {
                         <th 
                           rowSpan={2} 
                           className={cn(
-                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap", 
+                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
                             selectedCols.has('P') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'P' && "bg-red-50 dark:bg-gray-800 text-red-900 dark:text-red-300")
                           )} 
-                          onMouseEnter={() => setHoveredCol('P')} 
-                          onMouseLeave={() => setHoveredCol(null)}
+                          onClick={() => toggleColumnHighlight('P')}
+                          onMouseEnter={() => handleMouseEnterCol('P')} 
+                          onMouseLeave={handleMouseLeaveCol}
+                          title={selectedCols.has('P') ? "Remove highlight" : "Highlight Press column"}
                         >
                           <div className="flex flex-col justify-center h-full gap-2 w-full">
                             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -901,16 +976,21 @@ export default function App() {
                             <div className="flex items-center justify-between w-full">
                               <Info
                                 className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help"
+                                onClick={(e) => e.stopPropagation()}
                                 onMouseEnter={(e) => showTooltip(TOOLTIPS['P'], e)}
                                 onMouseLeave={hideTooltip}
                               />
                               <button
-                                onClick={() => toggleColumnHighlight('P')}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleColumnHighlight('P');
+                                }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
                                   selectedCols.has('P') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
                                 )}
-                                title="Highlight Press column"
+                                title={selectedCols.has('P') ? "Remove highlight" : "Highlight Press column"}
                               >
                                 <Highlighter className="w-3.5 h-3.5" />
                               </button>
@@ -921,11 +1001,13 @@ export default function App() {
                         <th 
                           rowSpan={2} 
                           className={cn(
-                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap", 
+                            "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
                             selectedCols.has('T') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'T' && "bg-red-50 dark:bg-gray-800 text-red-900 dark:text-red-300")
                           )} 
-                          onMouseEnter={() => setHoveredCol('T')} 
-                          onMouseLeave={() => setHoveredCol(null)}
+                          onClick={() => toggleColumnHighlight('T')}
+                          onMouseEnter={() => handleMouseEnterCol('T')} 
+                          onMouseLeave={handleMouseLeaveCol}
+                          title={selectedCols.has('T') ? "Remove highlight" : "Highlight Tsat column"}
                         >
                           <div className="flex flex-col justify-center h-full gap-2 w-full">
                             <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
@@ -942,16 +1024,21 @@ export default function App() {
                             <div className="flex items-center justify-between w-full">
                               <Info
                                 className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help"
+                                onClick={(e) => e.stopPropagation()}
                                 onMouseEnter={(e) => showTooltip(TOOLTIPS['T'], e)}
                                 onMouseLeave={hideTooltip}
                               />
                               <button
-                                onClick={() => toggleColumnHighlight('T')}
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  toggleColumnHighlight('T');
+                                }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
                                   selectedCols.has('T') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
                                 )}
-                                title="Highlight Tsat column"
+                                title={selectedCols.has('T') ? "Remove highlight" : "Highlight Tsat column"}
                               >
                                 <Highlighter className="w-3.5 h-3.5" />
                               </button>
@@ -1002,6 +1089,13 @@ export default function App() {
                           prop={col.id} 
                           colId={col.id} 
                           isCategoryEnd={colIdx === c.cols.length - 1} 
+                          isHovered={hoveredCol === col.id}
+                          isSelected={selectedCols.has(col.id)}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
                         />
                       ))
                     )}
@@ -1041,19 +1135,57 @@ export default function App() {
 
                         {tableData.indexProperty === 'T' ? (
                           <>
-                            <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>
+                            <Td 
+                              colId="T" 
+                              isRowHovered={isHovered} 
+                              isPinned={isPinned} 
+                              isHighlighted={isHighlighted}
+                              isColHovered={hoveredCol === 'T'}
+                              isColSelected={selectedCols.has('T')}
+                              onMouseEnterCol={handleMouseEnterCol}
+                              onMouseLeaveCol={handleMouseLeaveCol}
+                            >
                               {formatTempDisplay(row.T)}
                             </Td>
-                            <Td colId="P" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isCategoryEnd={true}>
+                            <Td 
+                              colId="P" 
+                              isRowHovered={isHovered} 
+                              isPinned={isPinned} 
+                              isHighlighted={isHighlighted} 
+                              isCategoryEnd={true}
+                              isColHovered={hoveredCol === 'P'}
+                              isColSelected={selectedCols.has('P')}
+                              onMouseEnterCol={handleMouseEnterCol}
+                              onMouseLeaveCol={handleMouseLeaveCol}
+                            >
                               {formatPressDisplay(row.P)}
                             </Td>
                           </>
                         ) : (
                           <>
-                            <Td colId="P" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>
+                            <Td 
+                              colId="P" 
+                              isRowHovered={isHovered} 
+                              isPinned={isPinned} 
+                              isHighlighted={isHighlighted}
+                              isColHovered={hoveredCol === 'P'}
+                              isColSelected={selectedCols.has('P')}
+                              onMouseEnterCol={handleMouseEnterCol}
+                              onMouseLeaveCol={handleMouseLeaveCol}
+                            >
                               {formatPressDisplay(row.P)}
                             </Td>
-                            <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isCategoryEnd={true}>
+                            <Td 
+                              colId="T" 
+                              isRowHovered={isHovered} 
+                              isPinned={isPinned} 
+                              isHighlighted={isHighlighted} 
+                              isCategoryEnd={true}
+                              isColHovered={hoveredCol === 'T'}
+                              isColSelected={selectedCols.has('T')}
+                              onMouseEnterCol={handleMouseEnterCol}
+                              onMouseLeaveCol={handleMouseLeaveCol}
+                            >
                               {formatTempDisplay(row.T)}
                             </Td>
                           </>
@@ -1070,6 +1202,10 @@ export default function App() {
                                 isPinned={isPinned} 
                                 isHighlighted={isHighlighted}
                                 isCategoryEnd={colIdx === c.cols.length - 1}
+                                isColHovered={hoveredCol === col.id}
+                                isColSelected={selectedCols.has(col.id)}
+                                onMouseEnterCol={handleMouseEnterCol}
+                                onMouseLeaveCol={handleMouseLeaveCol}
                               >
                                 {valObj ? valObj.s : '-'}
                               </Td>
@@ -1216,11 +1352,11 @@ export default function App() {
                                                <Highlighter className="w-3.5 h-3.5" />
                                              </button>
                                            </td>
-                                           <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
-                                          <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.v.s}</Td>
-                                          <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.u.s}</Td>
-                                          <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.h.s}</Td>
-                                          <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.s.s}</Td>
+                                           <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
+                                          <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>
+                                          <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>
+                                          <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>
+                                          <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>
                                         </tr>
                                       );
                                    })}
@@ -1307,11 +1443,11 @@ export default function App() {
                                                 <Highlighter className="w-3.5 h-3.5" />
                                               </button>
                                             </td>
-                                            <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
-                                            <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.v.s}</Td>
-                                            <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.u.s}</Td>
-                                            <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.h.s}</Td>
-                                            <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted}>{row.s.s}</Td>
+                                            <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
+                                            <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>
+                                            <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>
+                                            <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>
+                                            <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>
                                           </tr>
                                         );
                                     })}
@@ -1364,11 +1500,11 @@ export default function App() {
                             <Highlighter className="w-3.5 h-3.5" />
                           </button>
                         </td>
-                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.T.s}</Td>
-                        <Td colId="h" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.h.s}</Td>
-                        <Td colId="u" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.u.s}</Td>
-                        <Td colId="s_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.s_deg.s}</Td>
-                        <Td colId="s_plus" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.s_plus?.s || '-'}</Td>
+                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.T.s}</Td>
+                        <Td colId="h" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>
+                        <Td colId="u" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>
+                        <Td colId="s_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_deg'} isColSelected={selectedCols.has('s_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_deg.s}</Td>
+                        <Td colId="s_plus" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_plus'} isColSelected={selectedCols.has('s_plus')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_plus?.s || '-'}</Td>
                       </tr>
                     );
                   })}
@@ -1411,10 +1547,10 @@ export default function App() {
                             <Highlighter className="w-3.5 h-3.5" />
                           </button>
                         </td>
-                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.T.s}</Td>
-                        <Td colId="h_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.h_bar.s}</Td>
-                        <Td colId="u_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.u_bar.s}</Td>
-                        <Td colId="s_bar_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted}>{row.s_bar_deg.s}</Td>
+                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.T.s}</Td>
+                        <Td colId="h_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_bar'} isColSelected={selectedCols.has('h_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_bar.s}</Td>
+                        <Td colId="u_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u_bar'} isColSelected={selectedCols.has('u_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u_bar.s}</Td>
+                        <Td colId="s_bar_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_bar_deg'} isColSelected={selectedCols.has('s_bar_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_bar_deg.s}</Td>
                       </tr>
                     );
                   })}
