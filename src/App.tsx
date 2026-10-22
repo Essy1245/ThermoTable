@@ -96,8 +96,8 @@ const SubHeader = React.memo(function SubHeader({
       className={cn(
         "px-2 py-1.5 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-14 transition-colors h-10 select-none whitespace-nowrap cursor-pointer",
         isSelected 
-          ? "z-30 bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" 
-          : (isHovered ? "z-20 bg-red-50 dark:bg-gray-700 text-red-900 dark:text-red-300" : "z-10"),
+          ? "z-30 bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" 
+          : (isHovered ? "z-20 bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100" : "z-10"),
         isCategoryEnd ? "border-r-2 border-r-gray-300 dark:border-r-gray-700" : "border-r border-r-gray-200/60 dark:border-r-gray-800/80"
       )}
       onClick={() => onToggleHighlight(colId)}
@@ -126,8 +126,8 @@ const SubHeader = React.memo(function SubHeader({
           className={cn(
             "p-1 rounded transition-colors shrink-0 cursor-pointer",
             isSelected 
-              ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" 
-              : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-200 dark:hover:bg-gray-800"
+              ? "text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40" 
+              : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-200 dark:hover:bg-gray-700"
           )}
           title={isSelected ? "Remove highlight" : "Highlight column"}
         >
@@ -163,23 +163,23 @@ const Td = React.memo(function Td({
 }) {
   let bgStyle = "";
   if (isHighlighted) {
-    bgStyle = "bg-indigo-200/90 text-indigo-950 dark:bg-indigo-900/80 dark:text-indigo-100 font-bold relative z-10 ring-1 ring-indigo-400 dark:ring-indigo-400";
+    bgStyle = "bg-indigo-200/90 text-indigo-950 dark:bg-indigo-500/30 dark:text-white font-bold relative z-10 ring-1 ring-inset ring-indigo-400 dark:ring-indigo-400/70";
   } else if (isPinned && isColSelected) {
-    bgStyle = "bg-amber-300 text-amber-950 dark:bg-amber-500/40 dark:text-amber-100 font-bold ring-1 ring-amber-400 dark:ring-amber-400";
+    bgStyle = "bg-amber-300/90 text-gray-950 dark:bg-amber-500/[0.32] dark:text-white font-bold ring-1 ring-inset ring-amber-500/60 dark:ring-amber-400/60";
   } else if (isPinned) {
     bgStyle = isColHovered 
-      ? "bg-amber-200/90 text-amber-950 dark:bg-amber-800/80 dark:text-amber-50 font-semibold" 
-      : "bg-amber-100/90 text-amber-950 dark:bg-amber-950/70 dark:text-amber-200 font-semibold";
+      ? "bg-amber-200/85 text-gray-950 dark:bg-amber-500/[0.24] dark:text-white font-semibold" 
+      : "bg-amber-100/80 text-gray-900 dark:bg-amber-500/[0.15] dark:text-gray-100 font-semibold";
   } else if (isColSelected) {
     bgStyle = isRowHovered 
-      ? "bg-red-200/90 text-red-950 dark:bg-red-800/75 dark:text-red-50 font-medium" 
-      : "bg-red-100/70 text-red-950 dark:bg-red-950/65 dark:text-red-200";
+      ? "bg-red-200/80 text-gray-950 dark:bg-rose-500/[0.26] dark:text-white" 
+      : "bg-red-100/65 text-gray-900 dark:bg-rose-500/[0.16] dark:text-gray-100";
   } else if (isRowHovered && isColHovered) {
-    bgStyle = "bg-red-100/75 dark:bg-gray-600/80 text-gray-950 dark:text-white font-medium";
+    bgStyle = "bg-red-100/65 dark:bg-gray-700/75 text-gray-950 dark:text-white";
   } else if (isRowHovered) {
-    bgStyle = "bg-red-50/65 dark:bg-gray-700/65 text-gray-900 dark:text-gray-100";
+    bgStyle = "bg-red-50/55 dark:bg-gray-800/90 text-gray-900 dark:text-gray-100";
   } else if (isColHovered) {
-    bgStyle = "bg-red-50/65 dark:bg-gray-700/65 text-gray-900 dark:text-gray-100";
+    bgStyle = "bg-red-50/55 dark:bg-gray-800/90 text-gray-900 dark:text-gray-100";
   }
 
   return (
@@ -232,7 +232,8 @@ export default function App() {
     const target = e.target as HTMLElement | null;
     if (!target) return;
     const colEl = target.closest('[data-col-id]') as HTMLElement | null;
-    const rowEl = target.closest('[data-row-key]') as HTMLElement | null;
+    const cellEl = colEl || (target.closest('[data-pin-cell]') as HTMLElement | null);
+    const rowEl = cellEl ? (cellEl.closest('[data-row-key]') as HTMLElement | null) : null;
     const nextCol = colEl ? colEl.getAttribute('data-col-id') : null;
     const nextRow = rowEl ? rowEl.getAttribute('data-row-key') : null;
     setHoveredCol(prev => (prev === nextCol ? prev : nextCol));
@@ -630,8 +631,8 @@ export default function App() {
           "px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 select-none transition-colors h-12 sm:h-14 whitespace-nowrap cursor-pointer",
           widthClass,
           isSelected 
-            ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" 
-            : (isHovered && "bg-red-50 dark:bg-gray-700 text-red-900 dark:text-red-300")
+            ? "bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" 
+            : (isHovered && "bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100")
         )}
         onClick={() => toggleColumnHighlight(id)}
         onMouseEnter={() => handleMouseEnterCol(id)}
@@ -640,7 +641,7 @@ export default function App() {
       >
         <div className="flex flex-col justify-center h-full gap-1.5 sm:gap-2 w-full">
           <div className="flex items-center gap-1">
-            <span className="font-semibold text-xs text-gray-700 dark:text-gray-300">{label}</span>
+            <span className="font-semibold text-xs text-gray-700 dark:text-gray-200">{label}</span>
             {id === 'T' && !isIdealGas ? (
               <select 
                 className="bg-transparent border-b border-gray-300 dark:border-gray-600 text-xs font-semibold focus:outline-none cursor-pointer hover:border-red-600 dark:hover:border-red-400 text-gray-700 dark:text-gray-200 transition-colors"
@@ -668,8 +669,8 @@ export default function App() {
               className={cn(
                 "p-1 rounded transition-colors shrink-0 cursor-pointer",
                 isSelected 
-                  ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" 
-                  : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                  ? "text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40" 
+                  : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700"
               )}
               title={isSelected ? "Remove highlight" : `Highlight ${label} column`}
             >
@@ -817,7 +818,7 @@ export default function App() {
           </div>
           
           {/* Jump-to Controls */}
-          <div className="flex flex-nowrap items-center gap-1.5 sm:gap-2 bg-black/15 dark:bg-black/35 p-1.5 rounded border border-white/20 dark:border-white/10 shrink-0 w-full md:w-auto text-gray-900 dark:text-gray-100 relative">
+          <div className="flex flex-nowrap items-center gap-1.5 sm:gap-2 bg-black/15 dark:bg-black/25 p-1.5 rounded-md border border-white/20 dark:border-white/15 shrink-0 w-full md:w-auto text-gray-900 dark:text-gray-100 relative">
             <Search className="w-4 h-4 text-white/80 ml-0.5 sm:ml-1 shrink-0" />
             
             {(tableData?.type === 'superheated' || tableData?.type === 'compressed') ? (
@@ -827,17 +828,17 @@ export default function App() {
                     ref={jumpInputRef}
                     type="number" 
                     step="any"
-                    className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-red-400 dark:focus:ring-red-500 tabular-nums placeholder-gray-400 dark:placeholder-gray-500"
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
                     placeholder="Pressure"
                     title="Pressure value to jump to"
                     value={jumpValue}
                     onChange={(e) => setJumpValue(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleJump()}
                   />
-                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-gray-500 pointer-events-none">Ctrl+K</span>}
+                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
                 </div>
                 <select 
-                  className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 dark:focus:ring-red-500 cursor-pointer font-medium shrink-0"
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
                   value={jumpSuperheatedUnit}
                   onChange={(e) => {
                     const u = e.target.value as PressUnit;
@@ -856,16 +857,16 @@ export default function App() {
                   <input 
                     ref={jumpInputRef}
                     type="number" 
-                    className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-red-400 dark:focus:ring-red-500 tabular-nums placeholder-gray-400 dark:placeholder-gray-500"
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
                     placeholder="Value"
                     value={jumpValue}
                     onChange={(e) => setJumpValue(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleJump()}
                   />
-                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-gray-500 pointer-events-none">Ctrl+K</span>}
+                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
                 </div>
                 <select 
-                  className="bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-100 rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-red-400 dark:focus:ring-red-500 shrink-0"
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
                   value={jumpProperty}
                   onChange={(e) => setJumpProperty(e.target.value)}
                 >
@@ -882,7 +883,7 @@ export default function App() {
             )}
             
             <button 
-              className="bg-white dark:bg-gray-900 hover:bg-white/90 dark:hover:bg-gray-800 active:bg-white/80 dark:active:bg-gray-700 text-[#c13726] dark:text-red-400 border border-transparent dark:border-gray-700 font-semibold px-2.5 sm:px-3 py-1 rounded text-sm shadow-sm transition-colors cursor-pointer shrink-0"
+              className="bg-white dark:bg-white/15 hover:bg-red-50 dark:hover:bg-white/25 active:bg-red-100 dark:active:bg-white/30 text-[#c13726] dark:text-white border border-transparent dark:border-white/25 font-semibold px-2.5 sm:px-3 py-1 rounded text-sm shadow-sm transition-colors cursor-pointer shrink-0"
               onClick={handleJump}
             >
               Jump
@@ -908,7 +909,7 @@ export default function App() {
                           data-col-id="T"
                           className={cn(
                             "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
-                            selectedCols.has('T') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'T' && "bg-red-50 dark:bg-gray-700 text-red-900 dark:text-red-300")
+                            selectedCols.has('T') ? "bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" : (hoveredCol === 'T' && "bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100")
                           )} 
                           onClick={() => toggleColumnHighlight('T')}
                           onMouseEnter={() => handleMouseEnterCol('T')} 
@@ -942,7 +943,7 @@ export default function App() {
                                 }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
-                                  selectedCols.has('T') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                                  selectedCols.has('T') ? "text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                                 )}
                                 title={selectedCols.has('T') ? "Remove highlight" : "Highlight Temp column"}
                               >
@@ -957,7 +958,7 @@ export default function App() {
                           data-col-id="P"
                           className={cn(
                             "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
-                            selectedCols.has('P') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'P' && "bg-red-50 dark:bg-gray-700 text-red-900 dark:text-red-300")
+                            selectedCols.has('P') ? "bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" : (hoveredCol === 'P' && "bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100")
                           )} 
                           onClick={() => toggleColumnHighlight('P')}
                           onMouseEnter={() => handleMouseEnterCol('P')} 
@@ -992,7 +993,7 @@ export default function App() {
                                 }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
-                                  selectedCols.has('P') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                                  selectedCols.has('P') ? "text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                                 )}
                                 title={selectedCols.has('P') ? "Remove highlight" : "Highlight Psat column"}
                               >
@@ -1009,7 +1010,7 @@ export default function App() {
                           data-col-id="P"
                           className={cn(
                             "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
-                            selectedCols.has('P') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'P' && "bg-red-50 dark:bg-gray-700 text-red-900 dark:text-red-300")
+                            selectedCols.has('P') ? "bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" : (hoveredCol === 'P' && "bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100")
                           )} 
                           onClick={() => toggleColumnHighlight('P')}
                           onMouseEnter={() => handleMouseEnterCol('P')} 
@@ -1044,7 +1045,7 @@ export default function App() {
                                 }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
-                                  selectedCols.has('P') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                                  selectedCols.has('P') ? "text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                                 )}
                                 title={selectedCols.has('P') ? "Remove highlight" : "Highlight Press column"}
                               >
@@ -1059,7 +1060,7 @@ export default function App() {
                           data-col-id="T"
                           className={cn(
                             "px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-30 transition-colors h-14 select-none min-w-[70px] whitespace-nowrap cursor-pointer", 
-                            selectedCols.has('T') ? "bg-red-100/90 text-red-950 dark:bg-red-950/80 dark:text-red-200" : (hoveredCol === 'T' && "bg-red-50 dark:bg-gray-700 text-red-900 dark:text-red-300")
+                            selectedCols.has('T') ? "bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" : (hoveredCol === 'T' && "bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100")
                           )} 
                           onClick={() => toggleColumnHighlight('T')}
                           onMouseEnter={() => handleMouseEnterCol('T')} 
@@ -1093,7 +1094,7 @@ export default function App() {
                                 }}
                                 className={cn(
                                   "p-1 rounded transition-colors shrink-0 cursor-pointer",
-                                  selectedCols.has('T') ? "text-red-700 bg-red-200/90 dark:text-red-200 dark:bg-red-900/70 hover:bg-red-300 dark:hover:bg-red-800" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-800"
+                                  selectedCols.has('T') ? "text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40" : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700"
                                 )}
                                 title={selectedCols.has('T') ? "Remove highlight" : "Highlight Tsat column"}
                               >
@@ -1171,18 +1172,23 @@ export default function App() {
                         key={idx}
                         data-row-key={rKey}
                         ref={el => { rowRefs.current[rKey] = el; }}
-                        className={cn("transition-colors", isPinned ? "bg-amber-50 dark:bg-amber-950/20" : "bg-white dark:bg-gray-900")}
-                        onMouseEnter={() => setHoveredRow(rKey)}
-                        onMouseLeave={() => setHoveredRow(null)}
+                        className="transition-colors bg-white dark:bg-gray-900"
                       >
-                        <td className={cn("px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors", isPinned ? "bg-amber-100/90 dark:bg-amber-950/70" : (isHovered ? "bg-red-50/65 dark:bg-gray-700" : "bg-white dark:bg-gray-900"), isHighlighted && "bg-indigo-200/80 dark:bg-indigo-900/80 border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20")}>
+                        <td
+                          data-pin-cell="true"
+                          className={cn(
+                            "px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors",
+                            isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
+                            isHighlighted && "bg-indigo-200 dark:bg-[#23254b] border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20"
+                          )}
+                        >
                           <button 
                             onClick={() => togglePin(rKey)}
                             className={cn(
                               "p-1.5 rounded transition-colors cursor-pointer",
                               isPinned 
-                                ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-900/60 shadow-sm" 
-                                : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800",
+                                ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30 shadow-sm" 
+                                : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700",
                               isHovered && !isPinned && "text-gray-500 dark:text-gray-300"
                             )}
                             title={isPinned ? "Unpin row" : "Highlight row"}
@@ -1271,7 +1277,7 @@ export default function App() {
                           })
                         )}
                         
-                        <td className={cn("bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-0", isHighlighted && "bg-indigo-200/80 dark:bg-indigo-900/80 border-indigo-200 dark:border-indigo-700")} />
+                        <td className="bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-0" />
 
                         {idx === 0 && collapsedCategories.map((c) => (
                           <td 
@@ -1400,11 +1406,18 @@ export default function App() {
                                        const isHighlighted = highlightedRowIndex === rKey;
                                        const isHovered = hoveredRow === rKey;
                                        return (
-                                         <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900" onMouseEnter={() => setHoveredRow(rKey)} onMouseLeave={() => setHoveredRow(null)}>
-                                           <td className={cn("w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors", isRowPinned ? "bg-amber-100/90 dark:bg-amber-950/70" : (isHovered && "bg-red-50/65 dark:bg-gray-700/65"), isHighlighted && "bg-indigo-200/80 dark:bg-indigo-900/80 ring-1 ring-indigo-400 z-10")}>
+                                         <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900">
+                                           <td
+                                             data-pin-cell="true"
+                                             className={cn(
+                                               "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
+                                               isRowPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
+                                               isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                                             )}
+                                           >
                                              <button 
                                                onClick={() => toggleTempHighlight(tempStr, rKey)} 
-                                               className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200 dark:text-amber-200 dark:bg-amber-900/70" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
+                                               className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                                                title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
                                              >
                                                <Highlighter className="w-3.5 h-3.5" />
@@ -1491,11 +1504,18 @@ export default function App() {
                                         const isHighlighted = highlightedRowIndex === rKey;
                                         const isHovered = hoveredRow === rKey;
                                         return (
-                                          <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900" onMouseEnter={() => setHoveredRow(rKey)} onMouseLeave={() => setHoveredRow(null)}>
-                                            <td className={cn("w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors", isRowPinned ? "bg-amber-100/90 dark:bg-amber-950/70" : (isHovered && "bg-red-50/65 dark:bg-gray-700/65"), isHighlighted && "bg-indigo-200/80 dark:bg-indigo-900/80 ring-1 ring-indigo-400 z-10")}>
+                                          <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900">
+                                            <td
+                                              data-pin-cell="true"
+                                              className={cn(
+                                                "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
+                                                isRowPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
+                                                isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                                              )}
+                                            >
                                               <button 
                                                 onClick={() => toggleTempHighlight(tempStr, rKey)} 
-                                                className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200 dark:text-amber-200 dark:bg-amber-900/70" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
+                                                className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                                                 title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
                                               >
                                                 <Highlighter className="w-3.5 h-3.5" />
@@ -1547,13 +1567,18 @@ export default function App() {
                         data-row-key={rKey}
                         ref={el => { rowRefs.current[rKey] = el; }}
                         className="transition-colors bg-white dark:bg-gray-900"
-                        onMouseEnter={() => setHoveredRow(rKey)}
-                        onMouseLeave={() => setHoveredRow(null)}
                       >
-                        <td className={cn("w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors", isPinned ? "bg-amber-100/90 dark:bg-amber-950/70" : (isHovered && "bg-red-50/65 dark:bg-gray-700/65"), isHighlighted && "bg-indigo-200/80 dark:bg-indigo-900/80 ring-1 ring-indigo-400 z-10")}>
+                        <td
+                          data-pin-cell="true"
+                          className={cn(
+                            "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
+                            isPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
+                            isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                          )}
+                        >
                           <button 
                             onClick={() => togglePin(rKey)}
-                            className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200 dark:text-amber-200 dark:bg-amber-900/70" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
+                            className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                             title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
                           >
                             <Highlighter className="w-3.5 h-3.5" />
@@ -1595,13 +1620,18 @@ export default function App() {
                         data-row-key={rKey}
                         ref={el => { rowRefs.current[rKey] = el; }}
                         className="transition-colors bg-white dark:bg-gray-900"
-                        onMouseEnter={() => setHoveredRow(rKey)}
-                        onMouseLeave={() => setHoveredRow(null)}
                       >
-                        <td className={cn("w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors", isPinned ? "bg-amber-100/90 dark:bg-amber-950/70" : (isHovered && "bg-red-50/65 dark:bg-gray-700/65"), isHighlighted && "bg-indigo-200/80 dark:bg-indigo-900/80 ring-1 ring-indigo-400 z-10")}>
+                        <td
+                          data-pin-cell="true"
+                          className={cn(
+                            "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
+                            isPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
+                            isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                          )}
+                        >
                           <button 
                             onClick={() => togglePin(rKey)}
-                            className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200 dark:text-amber-200 dark:bg-amber-900/70" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
+                            className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                             title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
                           >
                             <Highlighter className="w-3.5 h-3.5" />
