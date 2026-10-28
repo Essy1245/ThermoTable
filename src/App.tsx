@@ -7,9 +7,10 @@ import type {
   IdealGasMolarRow, 
   ThermoValue 
 } from './data/types';
-import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X, Pin } from 'lucide-react';
+import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X, Pin, Camera } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { SnippetModal } from './snippet/SnippetModal';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -254,15 +255,35 @@ export default function App() {
   }, []);
 
   const [tablePinnedBlocks, setTablePinnedBlocks] = useState<Record<string, Set<number>>>({});
+  const [tableTouchedBlocks, setTableTouchedBlocks] = useState<Record<string, Set<number>>>({});
   const [tableCollapsedBlocks, setTableCollapsedBlocks] = useState<Record<string, Set<number>>>({});
   const [tableDisabledBlocks, setTableDisabledBlocks] = useState<Record<string, Set<number>>>({});
   const [showBlockFilter, setShowBlockFilter] = useState(false);
   const [pinnedTemps, setPinnedTemps] = useState<Set<string>>(new Set());
+  const [isSnippetOpen, setIsSnippetOpen] = useState<boolean>(false);
 
   const pinnedRows = useMemo(() => tablePinnedRows[currentTableId] || new Set<string>(), [tablePinnedRows, currentTableId]);
   const pinnedBlocks = useMemo(() => tablePinnedBlocks[currentTableId] || new Set<number>(), [tablePinnedBlocks, currentTableId]);
+  const touchedBlocks = useMemo(() => tableTouchedBlocks[currentTableId] || new Set<number>(), [tableTouchedBlocks, currentTableId]);
   const collapsedBlocks = useMemo(() => tableCollapsedBlocks[currentTableId] || new Set<number>(), [tableCollapsedBlocks, currentTableId]);
   const disabledBlocks = useMemo(() => tableDisabledBlocks[currentTableId] || new Set<number>(), [tableDisabledBlocks, currentTableId]);
+
+  const activeSnippetRowCount = useMemo(() => {
+    if (tableData?.type === 'superheated' || tableData?.type === 'compressed') {
+      return pinnedTemps.size + pinnedRows.size + (pinnedTemps.size === 0 && pinnedRows.size === 0 ? pinnedBlocks.size : 0);
+    }
+    return pinnedRows.size;
+  }, [tableData, pinnedTemps, pinnedRows, pinnedBlocks]);
+
+  const clearCurrentTableSelections = useCallback(() => {
+    setTablePinnedRows(prev => ({ ...prev, [currentTableId]: new Set<string>() }));
+    setTableSelectedCols(prev => ({ ...prev, [currentTableId]: new Set<string>() }));
+    setTablePinnedBlocks(prev => ({ ...prev, [currentTableId]: new Set<number>() }));
+    setTableTouchedBlocks(prev => ({ ...prev, [currentTableId]: new Set<number>() }));
+    if (tableData?.type === 'superheated' || tableData?.type === 'compressed') {
+      setPinnedTemps(new Set());
+    }
+  }, [currentTableId, tableData]);
 
   const setPinnedBlocks = (action: Set<number> | ((prev: Set<number>) => Set<number>)) => {
     setTablePinnedBlocks(prev => {
@@ -628,7 +649,7 @@ export default function App() {
       <th 
         data-col-id={id}
         className={cn(
-          "px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 select-none transition-colors h-12 sm:h-14 whitespace-nowrap cursor-pointer",
+          "px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-20 select-none transition-colors h-12 sm:h-14 whitespace-nowrap cursor-pointer",
           widthClass,
           isSelected 
             ? "bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" 
@@ -682,7 +703,15 @@ export default function App() {
     );
   };
 
-  const toggleTempHighlight = (tempStr: string, rKey: string) => {
+  const toggleTempHighlight = (tempStr: string, rKey: string, bIdx?: number) => {
+    if (bIdx !== undefined) {
+      setTableTouchedBlocks(prev => {
+        const current = prev[currentTableId] || new Set<number>();
+        const next = new Set(current);
+        next.add(bIdx);
+        return { ...prev, [currentTableId]: next };
+      });
+    }
     if (tempStr) {
       setPinnedTemps(prev => {
         const next = new Set(prev);
@@ -698,6 +727,22 @@ export default function App() {
   return (
     <>
       <TooltipPortal tooltip={tooltip} />
+      <SnippetModal
+        isOpen={isSnippetOpen}
+        onClose={() => setIsSnippetOpen(false)}
+        tableMeta={currentTable}
+        tableData={tableData}
+        tempUnit={tempUnit}
+        pressUnit={pressUnit}
+        visibleCols={visibleCols}
+        pinnedRows={pinnedRows}
+        pinnedTemps={pinnedTemps}
+        pinnedBlocks={pinnedBlocks}
+        touchedBlocks={touchedBlocks}
+        disabledBlocks={disabledBlocks}
+        selectedCols={selectedCols}
+        onClearAllSelections={clearCurrentTableSelections}
+      />
       <div
         className="h-screen h-dvh w-screen overflow-hidden bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col pt-0 pb-0 px-0 m-0 relative"
         onMouseMove={handleRootMouseMove}
@@ -817,7 +862,7 @@ export default function App() {
             </p>
           </div>
           
-          {/* Jump-to Controls */}
+          {/* Jump-to & Snippet Controls */}
           <div className="flex flex-nowrap items-center gap-1.5 sm:gap-2 bg-black/15 dark:bg-black/25 p-1.5 rounded-md border border-white/20 dark:border-white/15 shrink-0 w-full md:w-auto text-gray-900 dark:text-gray-100 relative">
             <Search className="w-4 h-4 text-white/80 ml-0.5 sm:ml-1 shrink-0" />
             
@@ -887,6 +932,32 @@ export default function App() {
               onClick={handleJump}
             >
               Jump
+            </button>
+
+            <div className="h-5 w-px bg-white/25 shrink-0 mx-0.5" />
+
+            <button
+              type="button"
+              onClick={() => setIsSnippetOpen(true)}
+              className={cn(
+                "inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1 rounded text-sm font-semibold transition-colors cursor-pointer shrink-0 border",
+                activeSnippetRowCount > 0
+                  ? "bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-gray-950 border-amber-300 shadow-sm"
+                  : "bg-white/15 hover:bg-white/25 active:bg-white/30 text-white border-white/25"
+              )}
+              title={
+                activeSnippetRowCount > 0
+                  ? `Generate image snippet (${activeSnippetRowCount} highlighted)`
+                  : "Generate textbook image snippet from highlighted rows/columns"
+              }
+            >
+              <Camera className="w-4 h-4 shrink-0" />
+              <span className="hidden sm:inline">Snippet</span>
+              {activeSnippetRowCount > 0 && (
+                <span className="inline-flex items-center justify-center px-1.5 py-0.2 rounded-full text-[11px] font-bold bg-black/80 text-amber-300 leading-tight">
+                  {activeSnippetRowCount}
+                </span>
+              )}
             </button>
           </div>
         </div>
@@ -1176,14 +1247,17 @@ export default function App() {
                       >
                         <td
                           data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
                           className={cn(
-                            "px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors",
+                            "px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
                             isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
                             isHighlighted && "bg-indigo-200 dark:bg-[#23254b] border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20"
                           )}
+                          title={isPinned ? "Unpin row" : "Highlight row"}
                         >
                           <button 
-                            onClick={() => togglePin(rKey)}
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
                             className={cn(
                               "p-1.5 rounded transition-colors cursor-pointer",
                               isPinned 
@@ -1390,7 +1464,7 @@ export default function App() {
                                  <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                                    <thead>
                                     <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                                      <th className="w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 h-12 sm:h-14"></th>
+                                      <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                                       {renderColHeader('T', 'Temp', '°C', 'min-w-[68px]')}
                                       {renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
                                       {renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
@@ -1409,14 +1483,17 @@ export default function App() {
                                          <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900">
                                            <td
                                              data-pin-cell="true"
+                                             onClick={() => toggleTempHighlight(tempStr, rKey, bIdx)}
                                              className={cn(
-                                               "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
-                                               isRowPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
-                                               isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                                               "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
+                                               isRowPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
+                                               isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
                                              )}
+                                             title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
                                            >
                                              <button 
-                                               onClick={() => toggleTempHighlight(tempStr, rKey)} 
+                                               type="button"
+                                               onClick={(e) => { e.stopPropagation(); toggleTempHighlight(tempStr, rKey, bIdx); }} 
                                                className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                                                title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
                                              >
@@ -1488,7 +1565,7 @@ export default function App() {
                                 <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                                   <thead>
                                     <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                                      <th className="w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 h-12 sm:h-14"></th>
+                                      <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                                       {renderColHeader('T', 'Temp', '°C', 'min-w-[68px]')}
                                       {renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
                                       {renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
@@ -1507,14 +1584,17 @@ export default function App() {
                                           <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900">
                                             <td
                                               data-pin-cell="true"
+                                              onClick={() => toggleTempHighlight(tempStr, rKey, bIdx)}
                                               className={cn(
-                                                "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
-                                                isRowPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
-                                                isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                                                "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
+                                                isRowPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
+                                                isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
                                               )}
+                                              title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
                                             >
                                               <button 
-                                                onClick={() => toggleTempHighlight(tempStr, rKey)} 
+                                                type="button"
+                                                onClick={(e) => { e.stopPropagation(); toggleTempHighlight(tempStr, rKey, bIdx); }} 
                                                 className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                                                 title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
                                               >
@@ -1547,7 +1627,7 @@ export default function App() {
               <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                    <th className="w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 h-12 sm:h-14"></th>
+                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('T', 'Temp', 'K', 'min-w-[70px]')}
                     {renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
                     {renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
@@ -1570,14 +1650,17 @@ export default function App() {
                       >
                         <td
                           data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
                           className={cn(
-                            "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
-                            isPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
-                            isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                            "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
+                            isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
+                            isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
                           )}
+                          title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
                         >
                           <button 
-                            onClick={() => togglePin(rKey)}
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
                             className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                             title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
                           >
@@ -1601,7 +1684,7 @@ export default function App() {
               <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                    <th className="w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 h-12 sm:h-14"></th>
+                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('T', 'Temp', 'K', 'min-w-[70px]')}
                     {renderColHeader('h_bar', 'h̄', 'kJ/kmol', 'min-w-[90px]')}
                     {renderColHeader('u_bar', 'ū', 'kJ/kmol', 'min-w-[90px]')}
@@ -1623,14 +1706,17 @@ export default function App() {
                       >
                         <td
                           data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
                           className={cn(
-                            "w-7 sm:w-8 min-w-[28px] sm:min-w-[32px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 flex items-center justify-center transition-colors",
-                            isPinned ? "bg-amber-100/80 dark:bg-amber-500/[0.15]" : (isHovered && "bg-red-50/55 dark:bg-gray-800/90"),
-                            isHighlighted && "bg-indigo-200/90 dark:bg-indigo-500/30 ring-1 ring-indigo-400 z-10"
+                            "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
+                            isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
+                            isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
                           )}
+                          title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
                         >
                           <button 
-                            onClick={() => togglePin(rKey)}
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
                             className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
                             title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
                           >
