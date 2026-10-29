@@ -8,7 +8,7 @@ import {
   Share2,
   Highlighter,
   Trash2,
-  Sparkles,
+  Crop,
 } from 'lucide-react';
 import type { TableMeta } from '../data/tablesMeta';
 import type {
@@ -382,20 +382,11 @@ export function SnippetModal({
     if (!isOpen || !tableData) return;
 
     // 1. Determine active columns:
-    // If user highlighted columns in the table, include the primary index column + those highlighted columns.
-    // Otherwise include all visible columns (for Table A-17, default to textbook T, h, u, s° unless s_plus was explicitly selected).
+    // Match highlighted columns on popup. If none highlighted, leave default selections empty.
     if (selectedCols.size > 0) {
-      const nextCols = new Set<string>(selectedCols);
-      // Always include primary index column by default for context
-      const primaryIndex =
-        tableData.type === 'saturated' ? tableData.indexProperty : 'T';
-      nextCols.add(primaryIndex);
-      setActiveColIds(nextCols);
+      setActiveColIds(new Set(selectedCols));
     } else {
-      const defaultCols = allColumns
-        .filter((c) => !(tableData.type === 'ideal_gas_air' && c.id === 's_plus'))
-        .map((c) => c.id);
-      setActiveColIds(new Set(defaultCols));
+      setActiveColIds(new Set());
     }
 
     // 2. Determine active blocks for superheated/compressed:
@@ -569,7 +560,6 @@ export function SnippetModal({
     setActiveColIds((prev) => {
       const next = new Set(prev);
       if (next.has(colId)) {
-        if (next.size <= 1) return prev; // Keep at least 1 column
         next.delete(colId);
       } else {
         next.add(colId);
@@ -606,9 +596,9 @@ export function SnippetModal({
         {/* Modal Header */}
         <div className="px-4 py-3 bg-[#c13726] dark:bg-[#852115] text-white flex items-center justify-between gap-2 shrink-0">
           <div className="flex items-center gap-2 min-w-0">
-            <Sparkles className="w-4 h-4 shrink-0 text-white/90" />
+            <Crop className="w-4 h-4 shrink-0 text-white/90" />
             <h2 className="text-sm sm:text-base font-bold tracking-wide truncate">
-              Textbook Image Snippet — {tableMeta.name}
+              Screen Capture Snippet — {tableMeta.name}
             </h2>
           </div>
           <div className="flex items-center gap-1.5 shrink-0">
@@ -673,20 +663,20 @@ export function SnippetModal({
                       >
                         All
                       </button>
+                      <span className="text-gray-300 dark:text-gray-600">·</span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveColIds(new Set())}
+                        className="text-gray-500 dark:text-gray-400 hover:underline font-medium cursor-pointer"
+                      >
+                        None
+                      </button>
                       {selectedCols.size > 0 && (
                         <>
                           <span className="text-gray-300 dark:text-gray-600">·</span>
                           <button
                             type="button"
-                            onClick={() => {
-                              const primaryIndex =
-                                tableData?.type === 'saturated'
-                                  ? tableData.indexProperty
-                                  : 'T';
-                              setActiveColIds(
-                                new Set([primaryIndex, ...Array.from(selectedCols)])
-                              );
-                            }}
+                            onClick={() => setActiveColIds(new Set(selectedCols))}
                             className="text-gray-600 dark:text-gray-300 hover:underline font-medium cursor-pointer"
                           >
                             Highlighted Only
@@ -766,24 +756,35 @@ export function SnippetModal({
 
               {/* Interactive Preview Container */}
               <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between gap-2 px-0.5">
-                  <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
-                    Tap any value on the snippet to circle/emphasize it:
-                  </span>
-                  {emphasizedCells.size > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setEmphasizedCells(new Set())}
-                      className="text-xs text-[#c13726] dark:text-red-400 hover:underline font-medium cursor-pointer"
-                    >
-                      Clear circles ({emphasizedCells.size})
-                    </button>
-                  )}
-                </div>
+                {orderedActiveColumns.length > 0 && (
+                  <div className="flex items-center justify-between gap-2 px-0.5">
+                    <span className="text-xs font-medium text-gray-600 dark:text-gray-300">
+                      Tap any value on the snippet to circle/emphasize it:
+                    </span>
+                    {emphasizedCells.size > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setEmphasizedCells(new Set())}
+                        className="text-xs text-[#c13726] dark:text-red-400 hover:underline font-medium cursor-pointer"
+                      >
+                        Clear circles ({emphasizedCells.size})
+                      </button>
+                    )}
+                  </div>
+                )}
 
                 {/* Checkerboard / Neutral frame holding the light-mode PNG */}
-                <div className="bg-gray-200/70 dark:bg-gray-950 border border-gray-300 dark:border-gray-800 rounded-lg p-2.5 sm:p-4 overflow-x-auto flex items-center justify-center">
-                  {renderResult ? (
+                <div className="bg-gray-200/70 dark:bg-gray-950 border border-gray-300 dark:border-gray-800 rounded-lg p-2 sm:p-3 overflow-x-auto flex items-center justify-center min-h-[140px]">
+                  {orderedActiveColumns.length === 0 ? (
+                    <div className="py-10 px-4 text-center flex flex-col items-center justify-center gap-1.5">
+                      <p className="text-sm font-semibold text-gray-700 dark:text-gray-200">
+                        No columns selected
+                      </p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 max-w-sm">
+                        Select one or more columns above (or click &quot;All&quot;) to generate your snippet.
+                      </p>
+                    </div>
+                  ) : renderResult ? (
                     <div
                       className="relative inline-block shadow-md rounded-xs overflow-hidden select-none shrink-0"
                       style={{
@@ -823,15 +824,17 @@ export function SnippetModal({
                       })}
                     </div>
                   ) : (
-                    <div className="py-12 text-xs text-gray-500">
+                    <div className="py-10 text-xs text-gray-500">
                       Rendering snippet...
                     </div>
                   )}
                 </div>
 
-                <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center sm:hidden">
-                  Tip: You can also press and hold the image directly to Copy or Save to Photos.
-                </p>
+                {orderedActiveColumns.length > 0 && (
+                  <p className="text-[11px] text-gray-400 dark:text-gray-500 text-center sm:hidden">
+                    Tip: You can also press and hold the image directly to Copy or Save to Photos.
+                  </p>
+                )}
               </div>
             </>
           )}
@@ -843,7 +846,7 @@ export function SnippetModal({
             <button
               type="button"
               onClick={handleDownloadImage}
-              disabled={!renderResult}
+              disabled={!renderResult || orderedActiveColumns.length === 0}
               className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs sm:text-sm font-semibold bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer disabled:opacity-50"
             >
               <Download className="w-4 h-4" />
@@ -854,7 +857,7 @@ export function SnippetModal({
               <button
                 type="button"
                 onClick={handleShareImage}
-                disabled={!renderResult}
+                disabled={!renderResult || orderedActiveColumns.length === 0}
                 className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs sm:text-sm font-semibold bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer disabled:opacity-50"
               >
                 <Share2 className="w-4 h-4" />
@@ -865,7 +868,7 @@ export function SnippetModal({
             <button
               type="button"
               onClick={handleCopyImage}
-              disabled={!renderResult}
+              disabled={!renderResult || orderedActiveColumns.length === 0}
               className={`inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-md text-xs sm:text-sm font-semibold text-white shadow-xs transition-colors cursor-pointer flex-1 sm:flex-initial disabled:opacity-50 ${
                 copyStatus === 'copied'
                   ? 'bg-emerald-600 hover:bg-emerald-700'

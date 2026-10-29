@@ -7,7 +7,7 @@ import type {
   IdealGasMolarRow, 
   ThermoValue 
 } from './data/types';
-import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X, Pin, Camera } from 'lucide-react';
+import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X, Pin, Crop } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { SnippetModal } from './snippet/SnippetModal';
@@ -940,21 +940,21 @@ export default function App() {
               type="button"
               onClick={() => setIsSnippetOpen(true)}
               className={cn(
-                "inline-flex items-center justify-center gap-1.5 px-2.5 sm:px-3 py-1 rounded text-sm font-semibold transition-colors cursor-pointer shrink-0 border",
+                "inline-flex items-center justify-center p-1.5 sm:px-2 rounded text-sm font-semibold transition-colors cursor-pointer shrink-0 border",
                 activeSnippetRowCount > 0
                   ? "bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-gray-950 border-amber-300 shadow-sm"
                   : "bg-white/15 hover:bg-white/25 active:bg-white/30 text-white border-white/25"
               )}
               title={
                 activeSnippetRowCount > 0
-                  ? `Generate image snippet (${activeSnippetRowCount} highlighted)`
-                  : "Generate textbook image snippet from highlighted rows/columns"
+                  ? `Capture snippet (${activeSnippetRowCount} rows highlighted)`
+                  : "Capture snippet from highlighted rows/columns"
               }
+              aria-label="Screen capture snippet"
             >
-              <Camera className="w-4 h-4 shrink-0" />
-              <span className="hidden sm:inline">Snippet</span>
+              <Crop className="w-4 h-4 shrink-0" />
               {activeSnippetRowCount > 0 && (
-                <span className="inline-flex items-center justify-center px-1.5 py-0.2 rounded-full text-[11px] font-bold bg-black/80 text-amber-300 leading-tight">
+                <span className="ml-1 inline-flex items-center justify-center px-1.5 py-0.2 rounded-full text-[11px] font-bold bg-black/80 text-amber-300 leading-tight">
                   {activeSnippetRowCount}
                 </span>
               )}
