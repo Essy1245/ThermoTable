@@ -4,3 +4,26 @@
   color-scheme: light dark;
 }
 
+@font-face {
+  font-family: 'STIX Two Text';
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: local('STIX Two Text'), local('STIXTwoText'), url('./assets/fonts/STIXTwoText-Variable.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'STIX Two Text';
+  font-style: italic;
+  font-weight: 400 700;
+  font-display: swap;
+  src: local('STIX Two Text Italic'), local('STIXTwoText-Italic'), url('./assets/fonts/STIXTwoText-Italic-Variable.ttf') format('truetype');
+}
+
+@font-face {
+  font-family: 'Inter';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: local('Inter'), url('./assets/fonts/Inter-Variable.ttf') format('truetype');
+}

@@ -74,8 +74,10 @@ const PALETTE = {
   emphasisText: '#9e0b14',
 };
 
-const SERIF_FONT = 'Georgia, "Times New Roman", Times, serif';
-const SANS_FONT = 'Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
+// Primary textbook font matching Property_Tables_SI.pdf (STIX / STIXGeneral / STIXMathJax_Main)
+const TEXTBOOK_SERIF = '"STIX Two Text", "STIXGeneral", "STIXMathJax_Main", Georgia, "Times New Roman", Times, serif';
+// Geometric sans-serif for table badges matching Proxima Nova in Property_Tables_SI.pdf
+const TEXTBOOK_SANS = '"Proxima Nova", Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif';
 
 /**
  * Measures the width of a column header (italic symbol + sub/sup + space + unit)
@@ -84,20 +86,20 @@ function measureHeaderCell(
   ctx: CanvasRenderingContext2D,
   col: SnippetColumnDef
 ): { totalWidth: number; symbolWidth: number; scriptWidth: number; spaceWidth: number; unitWidth: number } {
-  ctx.font = `italic 16.5px ${SERIF_FONT}`;
+  ctx.font = `italic 16.5px ${TEXTBOOK_SERIF}`;
   const symbolWidth = ctx.measureText(col.symbol).width;
 
   let scriptWidth = 0;
   if (col.subscript) {
-    ctx.font = `italic 11.5px ${SERIF_FONT}`;
+    ctx.font = `italic 11.5px ${TEXTBOOK_SERIF}`;
     scriptWidth = Math.max(scriptWidth, ctx.measureText(col.subscript).width + 1);
   }
   if (col.superscript) {
-    ctx.font = `13.5px ${SERIF_FONT}`;
+    ctx.font = `13.5px ${TEXTBOOK_SERIF}`;
     scriptWidth = Math.max(scriptWidth, ctx.measureText(col.superscript).width + 1);
   }
 
-  ctx.font = `400 15.5px ${SANS_FONT}`;
+  ctx.font = `400 14px ${TEXTBOOK_SERIF}`;
   const spaceWidth = col.unit ? 5 : 0;
   const unitWidth = col.unit ? ctx.measureText(col.unit).width : 0;
 
@@ -127,7 +129,7 @@ function drawHeaderCell(
   ctx.textBaseline = 'alphabetic';
 
   // 1. Base symbol in italic serif
-  ctx.font = `italic 16.5px ${SERIF_FONT}`;
+  ctx.font = `italic 16.5px ${TEXTBOOK_SERIF}`;
   ctx.fillText(col.symbol, curX, baselineY);
 
   // Optional molar overbar above the symbol
@@ -142,18 +144,18 @@ function drawHeaderCell(
 
   // 2. Subscript / Superscript
   if (col.subscript) {
-    ctx.font = `italic 11px ${SERIF_FONT}`;
+    ctx.font = `italic 11px ${TEXTBOOK_SERIF}`;
     ctx.fillText(col.subscript, curX + 0.5, baselineY + 3.5);
   }
   if (col.superscript) {
-    ctx.font = `400 13px ${SERIF_FONT}`;
+    ctx.font = `400 13px ${TEXTBOOK_SERIF}`;
     ctx.fillText(col.superscript, curX + 0.5, baselineY - 5);
   }
   curX += m.scriptWidth + m.spaceWidth;
 
   // 3. Unit
   if (col.unit) {
-    ctx.font = `400 15px ${SANS_FONT}`;
+    ctx.font = `400 14px ${TEXTBOOK_SERIF}`;
     ctx.fillText(col.unit, curX, baselineY);
   }
 }
@@ -191,6 +193,22 @@ export async function renderSnippetCanvas(
     throw new Error('No columns or groups to render');
   }
 
+  // Ensure textbook fonts matching Property_Tables_SI.pdf are loaded
+  if (typeof document !== 'undefined' && document.fonts) {
+    try {
+      await Promise.all([
+        document.fonts.load(`400 15px ${TEXTBOOK_SERIF}`),
+        document.fonts.load(`italic 16.5px ${TEXTBOOK_SERIF}`),
+        document.fonts.load(`600 13.5px ${TEXTBOOK_SERIF}`),
+        document.fonts.load(`700 15px ${TEXTBOOK_SERIF}`),
+        document.fonts.load(`700 15px ${TEXTBOOK_SANS}`),
+        document.fonts.ready,
+      ]);
+    } catch {
+      // Continue gracefully with fallback font stack
+    }
+  }
+
   const scale = 3; // Crisp 3x Retina output
   const measureCanvas = document.createElement('canvas');
   const mCtx = measureCanvas.getContext('2d')!;
@@ -200,11 +218,11 @@ export async function renderSnippetCanvas(
   const formattedTitle = config.tableTitle;
 
   // Measure banner requirements
-  mCtx.font = `700 16px ${SANS_FONT}`;
+  mCtx.font = `700 15px ${TEXTBOOK_SANS}`;
   const badgeTextW = mCtx.measureText(formattedBadge).width;
   const badgeBoxW = Math.ceil(badgeTextW + 20);
 
-  mCtx.font = `400 17px ${SERIF_FONT}`;
+  mCtx.font = `400 16.5px ${TEXTBOOK_SERIF}`;
   const titleTextW = mCtx.measureText(formattedTitle).width;
   const minBannerWidth = badgeBoxW + 14 + Math.ceil(titleTextW) + 16;
 
@@ -214,7 +232,7 @@ export async function renderSnippetCanvas(
     const headerM = measureHeaderCell(mCtx, col);
     let maxW = headerM.totalWidth;
 
-    mCtx.font = `400 15.5px ${SANS_FONT}`;
+    mCtx.font = `400 15px ${TEXTBOOK_SERIF}`;
     for (const group of config.groups) {
       for (const row of group.rows) {
         const val = row.cells[col.id] ?? '-';
@@ -227,7 +245,7 @@ export async function renderSnippetCanvas(
 
   // Check if any block subheaders exist and need width
   let maxBlockHeaderW = 0;
-  mCtx.font = `600 13px ${SANS_FONT}`;
+  mCtx.font = `600 13.5px ${TEXTBOOK_SERIF}`;
   for (const group of config.groups) {
     if (group.blockTitle) {
       const bw = mCtx.measureText(group.blockTitle).width + 20;
@@ -397,14 +415,14 @@ export async function renderSnippetCanvas(
 
   // Badge Text ("TABLE A–17")
   ctx.fillStyle = PALETTE.badgeText;
-  ctx.font = `700 16px ${SANS_FONT}`;
+  ctx.font = `700 15px ${TEXTBOOK_SANS}`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.fillText(formattedBadge, badgeBoxW / 2, bannerH / 2 + 0.5);
 
   // Title Text ("Ideal-gas properties of air")
   ctx.fillStyle = PALETTE.bannerText;
-  ctx.font = `400 17px ${SERIF_FONT}`;
+  ctx.font = `400 16.5px ${TEXTBOOK_SERIF}`;
   ctx.textAlign = 'left';
   ctx.textBaseline = 'middle';
   ctx.fillText(formattedTitle, badgeBoxW + 12, bannerH / 2 + 0.5);
@@ -448,7 +466,7 @@ export async function renderSnippetCanvas(
         ctx.fillRect(trackLeftX, trackCurY, trackWidth, blockSubheaderH - 2);
 
         ctx.fillStyle = PALETTE.blockHeaderText;
-        ctx.font = `600 13px ${SANS_FONT}`;
+        ctx.font = `600 13.5px ${TEXTBOOK_SERIF}`;
         ctx.textAlign = 'left';
         ctx.textBaseline = 'middle';
         ctx.fillText(block.blockTitle, trackLeftX + 8, trackCurY + blockSubheaderH / 2);
@@ -519,7 +537,7 @@ export async function renderSnippetCanvas(
             nh: dataRowH / logicalHeight,
           });
 
-          ctx.font = isEmphasized ? `700 15px ${SANS_FONT}` : `400 15px ${SANS_FONT}`;
+          ctx.font = isEmphasized ? `700 15px ${TEXTBOOK_SERIF}` : `400 15px ${TEXTBOOK_SERIF}`;
           const textW = ctx.measureText(val).width;
 
           if (isEmphasized) {
@@ -546,7 +564,7 @@ export async function renderSnippetCanvas(
             : PALETTE.cellText;
 
           if (isSatLabel && !isEmphasized) {
-            ctx.font = `600 14.5px ${SANS_FONT}`;
+            ctx.font = `600 14px ${TEXTBOOK_SERIF}`;
           }
 
           ctx.textAlign = 'center';

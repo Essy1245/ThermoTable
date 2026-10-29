@@ -167,7 +167,15 @@ Snippets are rendered using a hardcoded, light textbook palette:
 - Background: `#ffffff` / alternate zebra rows `#f9fafb`.
 - Text: `#1f2937` (gray-800) / `#111827` (gray-900).
 - Circles: `#dc2626` (vibrant red emphasis circles).
-Snippets generated while the user is in Dark Mode remain crisp, high-contrast, black-and-white/red textbook images ready for printing or light-themed documents.
+### Textbook Typography & Cross-Device Font Parity
+Inspection of `Property_Tables_SI.pdf` shows that the authoritative textbook uses:
+- **Table Data, Numbers, Math Symbols, and Units**: `STIXMathJax_Main` / `STIXGeneral` (standard scientific serif font).
+- **Table Number Badges (`TABLE A–4`)**: `ProximaNova-Bold` (geometric sans-serif).
+
+To eliminate OS-dependent font variance across devices (Mac, Windows, iOS, Android, Linux):
+1. **Bundled Font Assets**: The variable font family `STIX Two Text` (`src/assets/fonts/STIXTwoText-Variable.ttf` and `STIXTwoText-Italic-Variable.ttf`) and `Inter` (`src/assets/fonts/Inter-Variable.ttf`) are bundled directly with the application.
+2. **Dual-Mode Delivery**: `@font-face` definitions in `src/index.css` provide 100% offline local asset loading, paired with high-performance Google Fonts CDN preconnects in `index.html`.
+3. **Canvas Font Pre-Loading**: Before measuring metrics or drawing to HTML5 canvas, `renderSnippetCanvas.ts` invokes `document.fonts.load()` and awaits `document.fonts.ready`. This eliminates font rasterizer race conditions and ensures all devices render the identical textbook typeface.
 
 ### Memory & Object URL Lifecycle
 Canvas output is strictly single-encoded via `canvas.toBlob('image/png')`:
