@@ -529,8 +529,7 @@ function SnippetModalDialog({
   const canNativeShare = useMemo(() => {
     return (
       typeof navigator !== 'undefined' &&
-      typeof navigator.share === 'function' &&
-      typeof navigator.canShare === 'function'
+      typeof navigator.share === 'function'
     );
   }, []);
 
@@ -568,23 +567,6 @@ function SnippetModalDialog({
     };
   }, [tableMeta, orderedActiveColumns, rowGroups, emphasizedCells]);
 
-  const handleCopyImage = useCallback(async () => {
-    if (!renderResult) return;
-    try {
-      await navigator.clipboard.write([
-        new ClipboardItem({
-          'image/png': renderResult.blob,
-        }),
-      ]);
-      setCopyStatus('copied');
-      setTimeout(() => setCopyStatus('idle'), 2200);
-    } catch (err) {
-      console.error('Clipboard write failed:', err);
-      setCopyStatus('error');
-      setTimeout(() => setCopyStatus('idle'), 3000);
-    }
-  }, [renderResult]);
-
   const handleDownloadImage = useCallback(() => {
     if (!previewUrl) return;
     const a = document.createElement('a');
@@ -604,7 +586,7 @@ function SnippetModalDialog({
         `table-${tableMeta.id.toLowerCase()}-snippet.png`,
         { type: 'image/png' }
       );
-      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      if (!navigator.canShare || navigator.canShare({ files: [file] })) {
         await navigator.share({
           files: [file],
           title: `${tableMeta.name}: ${tableMeta.title}`,
@@ -618,6 +600,78 @@ function SnippetModalDialog({
       }
     }
   }, [renderResult, tableMeta, handleDownloadImage]);
+
+  const handleCopyImage = useCallback(async () => {
+    if (!renderResult) return;
+
+    let success = false;
+
+    // 1. Try modern Async Clipboard API
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.clipboard?.write &&
+      typeof window.ClipboardItem !== 'undefined'
+    ) {
+      try {
+        // Attempt with Promise.resolve(blob) — required by WebKit / Mobile Safari (iOS)
+        const item = new ClipboardItem({
+          'image/png': Promise.resolve(renderResult.blob),
+        });
+        await navigator.clipboard.write([item]);
+        success = true;
+      } catch (err1) {
+        console.warn('ClipboardItem with Promise failed, attempting direct Blob:', err1);
+        try {
+          // Fallback attempt with direct blob — accepted by standard Chromium
+          const item = new ClipboardItem({
+            'image/png': renderResult.blob,
+          });
+          await navigator.clipboard.write([item]);
+          success = true;
+        } catch (err2) {
+          console.warn('Direct ClipboardItem also failed:', err2);
+        }
+      }
+    }
+
+    if (success) {
+      setCopyStatus('copied');
+      setTimeout(() => setCopyStatus('idle'), 2200);
+      return;
+    }
+
+    // 2. Mobile fallback: If clipboard.write is blocked or unsupported (common on mobile browsers/webviews),
+    // trigger native mobile Web Share sheet which contains native "Copy", "Save", etc.
+    if (canNativeShare) {
+      try {
+        const file = new File(
+          [renderResult.blob],
+          `thermo-table-${tableMeta.id.toLowerCase()}-snippet.png`,
+          { type: 'image/png' }
+        );
+        if (!navigator.canShare || navigator.canShare({ files: [file] })) {
+          await navigator.share({
+            files: [file],
+            title: `${tableMeta.name}: ${tableMeta.title}`,
+          });
+          setCopyStatus('copied');
+          setTimeout(() => setCopyStatus('idle'), 2200);
+          return;
+        }
+      } catch (shareErr) {
+        if ((shareErr as Error)?.name === 'AbortError') {
+          // User dismissed the share sheet
+          return;
+        }
+        console.warn('Native share fallback failed:', shareErr);
+      }
+    }
+
+    // 3. Direct download fallback
+    handleDownloadImage();
+    setCopyStatus('copied');
+    setTimeout(() => setCopyStatus('idle'), 2200);
+  }, [renderResult, canNativeShare, tableMeta, handleDownloadImage]);
 
   // Keyboard shortcuts inside modal (Escape to close, Ctrl/Cmd+C to copy image)
   useEffect(() => {

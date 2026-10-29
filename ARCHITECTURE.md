@@ -185,6 +185,16 @@ Canvas output is strictly single-encoded via `canvas.toBlob('image/png')`:
   1. Whenever a new render replaces the existing preview.
   2. Whenever the modal unmounts or closes.
 
+### Mobile Clipboard & Sharing Strategy
+Mobile browsers enforce strict, differing constraints for copying image blobs:
+- **Mobile Safari (iOS)**: WebKit's implementation of `ClipboardItem` strictly requires a `Promise<Blob>` (e.g. `new ClipboardItem({ 'image/png': Promise.resolve(blob) })`). Passing a raw `Blob` directly throws a `TypeError`.
+- **Chromium / Android**: Accepts direct `Blob` or `Promise<Blob>`, but Android Chrome may restrict binary clipboard writing depending on user permissions or HTTPS origin context.
+- **Multi-Tier Fallback Chain**:
+  1. *Tier 1*: Attempt `new ClipboardItem({ 'image/png': Promise.resolve(blob) })` (iOS Safari compatibility).
+  2. *Tier 2*: Fall back to raw `new ClipboardItem({ 'image/png': blob })` (Chromium desktop/mobile).
+  3. *Tier 3*: If direct clipboard writing is blocked or unsupported, automatically invoke the native Web Share API (`navigator.share({ files: [file] })`), giving mobile users instant access to the native "Copy", "Save Image", and sharing sheet.
+  4. *Tier 4*: Fall back to direct file download so the user is never left stranded.
+
 ### Dialog Mounting Architecture (Race Condition Prevention)
 `SnippetModal` mounts a child `SnippetModalDialog` only when `props.isOpen === true`:
 ```tsx
