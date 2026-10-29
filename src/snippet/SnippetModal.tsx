@@ -382,12 +382,14 @@ export function SnippetModal({
     if (!isOpen || !tableData) return;
 
     // 1. Determine active columns:
-    // Match highlighted columns on popup. If none highlighted, leave default selections empty.
-    if (selectedCols.size > 0) {
-      setActiveColIds(new Set(selectedCols));
-    } else {
-      setActiveColIds(new Set());
+    // Include highlighted columns plus the table's leftmost independent variable by default.
+    // This only initializes the modal, so users can still toggle that column off afterward.
+    const initialColIds = new Set(selectedCols);
+    const independentColumn = allColumns[0];
+    if (independentColumn) {
+      initialColIds.add(independentColumn.id);
     }
+    setActiveColIds(initialColIds);
 
     // 2. Determine active blocks for superheated/compressed:
     if (tableData.type === 'superheated' || tableData.type === 'compressed') {
