@@ -461,6 +461,7 @@ export default function App() {
     const val1 = parseFloat(jumpValue);
     if (isNaN(val1) || !tableData) return;
 
+    setJumpValue('');
     jumpInputRef.current?.blur();
 
     let targetKey: string | null = null;
