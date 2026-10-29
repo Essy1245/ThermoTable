@@ -259,10 +259,11 @@ export default function App() {
   const [tableCollapsedBlocks, setTableCollapsedBlocks] = useState<Record<string, Set<number>>>({});
   const [tableDisabledBlocks, setTableDisabledBlocks] = useState<Record<string, Set<number>>>({});
   const [showBlockFilter, setShowBlockFilter] = useState(false);
-  const [pinnedTemps, setPinnedTemps] = useState<Set<string>>(new Set());
+  const [tablePinnedTemps, setTablePinnedTemps] = useState<Record<string, Set<string>>>({});
   const [isSnippetOpen, setIsSnippetOpen] = useState<boolean>(false);
 
   const pinnedRows = useMemo(() => tablePinnedRows[currentTableId] || new Set<string>(), [tablePinnedRows, currentTableId]);
+  const pinnedTemps = useMemo(() => tablePinnedTemps[currentTableId] || new Set<string>(), [tablePinnedTemps, currentTableId]);
   const pinnedBlocks = useMemo(() => tablePinnedBlocks[currentTableId] || new Set<number>(), [tablePinnedBlocks, currentTableId]);
   const touchedBlocks = useMemo(() => tableTouchedBlocks[currentTableId] || new Set<number>(), [tableTouchedBlocks, currentTableId]);
   const collapsedBlocks = useMemo(() => tableCollapsedBlocks[currentTableId] || new Set<number>(), [tableCollapsedBlocks, currentTableId]);
@@ -280,10 +281,8 @@ export default function App() {
     setTableSelectedCols(prev => ({ ...prev, [currentTableId]: new Set<string>() }));
     setTablePinnedBlocks(prev => ({ ...prev, [currentTableId]: new Set<number>() }));
     setTableTouchedBlocks(prev => ({ ...prev, [currentTableId]: new Set<number>() }));
-    if (tableData?.type === 'superheated' || tableData?.type === 'compressed') {
-      setPinnedTemps(new Set());
-    }
-  }, [currentTableId, tableData]);
+    setTablePinnedTemps(prev => ({ ...prev, [currentTableId]: new Set<string>() }));
+  }, [currentTableId]);
 
   const setPinnedBlocks = (action: Set<number> | ((prev: Set<number>) => Set<number>)) => {
     setTablePinnedBlocks(prev => {
@@ -353,7 +352,9 @@ export default function App() {
     for (const s of Object.values(tableSelectedCols)) {
       if (s && s.size > 0) return true;
     }
-    if (pinnedTemps.size > 0) return true;
+    for (const s of Object.values(tablePinnedTemps)) {
+      if (s && s.size > 0) return true;
+    }
     for (const s of Object.values(tablePinnedRows)) {
       if (s && s.size > 0) return true;
     }
@@ -361,7 +362,7 @@ export default function App() {
       if (s && s.size > 0) return true;
     }
     return false;
-  }, [tableSelectedCols, pinnedTemps, tablePinnedRows, tablePinnedBlocks]);
+  }, [tableSelectedCols, tablePinnedTemps, tablePinnedRows, tablePinnedBlocks]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -406,6 +407,7 @@ export default function App() {
       }
       
       if (e.key === 'Tab') {
+        if (isSnippetOpen) return;
         const target = e.target as HTMLElement;
         if (target.tagName !== 'INPUT' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA') {
           e.preventDefault();
@@ -416,7 +418,7 @@ export default function App() {
     
     document.addEventListener('keydown', handleGlobalKeyDown);
     return () => document.removeEventListener('keydown', handleGlobalKeyDown);
-  }, []);
+  }, [isSnippetOpen]);
 
   const formatTempDisplay = (val?: ThermoValue) => {
     if (!val) return '-';
@@ -713,11 +715,12 @@ export default function App() {
       });
     }
     if (tempStr) {
-      setPinnedTemps(prev => {
-        const next = new Set(prev);
+      setTablePinnedTemps(prev => {
+        const current = prev[currentTableId] || new Set<string>();
+        const next = new Set(current);
         if (next.has(tempStr)) next.delete(tempStr);
         else next.add(tempStr);
-        return next;
+        return { ...prev, [currentTableId]: next };
       });
     } else {
       togglePin(rKey);
@@ -1444,12 +1447,21 @@ export default function App() {
                         <Pin className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                         <h3 className="text-xs font-bold text-amber-700 dark:text-amber-400 uppercase tracking-wider">Pinned Isobars</h3>
                       </div>
-                      <div className="flex flex-col md:flex-row gap-3 sm:gap-4 overflow-x-auto pb-2 items-start">
+                      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
                         {Array.from(pinnedBlocks).map(bIdx => {
                           const block = tableData.blocks[bIdx];
                           if (!block) return null;
+                          const isBlockHighlighted = highlightedBlockIdx === bIdx;
                           return (
-                            <div key={`pinned-${bIdx}`} className="bg-white dark:bg-gray-900 border-2 border-amber-300 dark:border-amber-600/70 rounded shadow-sm shrink-0 min-w-0 w-full md:w-[380px] flex flex-col overflow-hidden">
+                            <div 
+                              key={`pinned-${bIdx}`} 
+                              className={cn(
+                                "bg-white dark:bg-gray-900 border-2 rounded shadow-sm flex flex-col overflow-hidden transition-all duration-300 min-w-0 w-full",
+                                isBlockHighlighted 
+                                  ? "border-indigo-500 ring-4 ring-indigo-400 dark:border-indigo-400 dark:ring-indigo-500/60 shadow-xl" 
+                                  : "border-amber-300 dark:border-amber-600/70"
+                              )}
+                            >
                                <div className="bg-amber-100 dark:bg-amber-950/70 px-2.5 sm:px-3 py-1.5 sm:py-2 flex items-center justify-between border-b border-amber-200 dark:border-amber-800/60">
                                  <span className="text-sm font-bold text-amber-900 dark:text-amber-200">
                                    P = {formatIsobarPress(block.P)} {block.Tsat.s !== 'N/A' && <span className="font-semibold text-amber-700 dark:text-amber-300 ml-1">({formatSatTemp(block.Tsat)})</span>}

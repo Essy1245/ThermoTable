@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import ReactDOM from 'react-dom';
 import {
   X,
@@ -44,8 +44,336 @@ interface SnippetModalProps {
   onClearAllSelections: () => void;
 }
 
-export function SnippetModal({
-  isOpen,
+function buildAllColumns(
+  tableMeta: TableMeta,
+  tableData: ThermoTableData | null | undefined,
+  tempUnit: TempUnit,
+  pressUnit: PressUnit,
+  visibleCols: Record<string, boolean>
+): SnippetColumnDef[] {
+  if (!tableData) return [];
+
+  if (tableData.type === 'saturated') {
+    const isIce = tableMeta.id === 'A-8';
+    const tCol: SnippetColumnDef = {
+      id: 'T',
+      symbol: 'T',
+      subscript: tableData.indexProperty === 'P' ? 'sat' : undefined,
+      unit: tempUnit === 'K' ? 'K' : '°C',
+      label: tableData.indexProperty === 'P' ? 'Tsat' : 'Temp',
+      isIndex: true,
+    };
+    const pCol: SnippetColumnDef = {
+      id: 'P',
+      symbol: 'P',
+      subscript: tableData.indexProperty === 'T' ? 'sat' : undefined,
+      unit: pressUnit,
+      label: tableData.indexProperty === 'T' ? 'Psat' : 'Press',
+      isIndex: true,
+    };
+
+    const cols: SnippetColumnDef[] =
+      tableData.indexProperty === 'T' ? [tCol, pCol] : [pCol, tCol];
+
+    if (visibleCols.volume) {
+      cols.push(
+        isIce
+          ? { id: 'vi', symbol: 'v', subscript: 'i', unit: 'm³/kg', label: 'vi' }
+          : { id: 'vf', symbol: 'v', subscript: 'f', unit: 'm³/kg', label: 'vf' },
+        { id: 'vg', symbol: 'v', subscript: 'g', unit: 'm³/kg', label: 'vg' }
+      );
+    }
+    if (visibleCols.energy) {
+      cols.push(
+        isIce
+          ? { id: 'ui', symbol: 'u', subscript: 'i', unit: 'kJ/kg', label: 'ui' }
+          : { id: 'uf', symbol: 'u', subscript: 'f', unit: 'kJ/kg', label: 'uf' },
+        isIce
+          ? { id: 'uig', symbol: 'u', subscript: 'ig', unit: 'kJ/kg', label: 'uig' }
+          : { id: 'ufg', symbol: 'u', subscript: 'fg', unit: 'kJ/kg', label: 'ufg' },
+        { id: 'ug', symbol: 'u', subscript: 'g', unit: 'kJ/kg', label: 'ug' }
+      );
+    }
+    if (visibleCols.enthalpy) {
+      cols.push(
+        isIce
+          ? { id: 'hi', symbol: 'h', subscript: 'i', unit: 'kJ/kg', label: 'hi' }
+          : { id: 'hf', symbol: 'h', subscript: 'f', unit: 'kJ/kg', label: 'hf' },
+        isIce
+          ? { id: 'hig', symbol: 'h', subscript: 'ig', unit: 'kJ/kg', label: 'hig' }
+          : { id: 'hfg', symbol: 'h', subscript: 'fg', unit: 'kJ/kg', label: 'hfg' },
+        { id: 'hg', symbol: 'h', subscript: 'g', unit: 'kJ/kg', label: 'hg' }
+      );
+    }
+    if (visibleCols.entropy) {
+      cols.push(
+        isIce
+          ? { id: 'si', symbol: 's', subscript: 'i', unit: 'kJ/kg · K', label: 'si' }
+          : { id: 'sf', symbol: 's', subscript: 'f', unit: 'kJ/kg · K', label: 'sf' },
+        isIce
+          ? { id: 'sig', symbol: 's', subscript: 'ig', unit: 'kJ/kg · K', label: 'sig' }
+          : { id: 'sfg', symbol: 's', subscript: 'fg', unit: 'kJ/kg · K', label: 'sfg' },
+        { id: 'sg', symbol: 's', subscript: 'g', unit: 'kJ/kg · K', label: 'sg' }
+      );
+    }
+    return cols;
+  }
+
+  if (tableData.type === 'superheated' || tableData.type === 'compressed') {
+    return [
+      {
+        id: 'T',
+        symbol: 'T',
+        unit: tempUnit === 'K' ? 'K' : '°C',
+        label: 'Temp',
+        isIndex: true,
+      },
+      { id: 'v', symbol: 'v', unit: 'm³/kg', label: 'v' },
+      { id: 'u', symbol: 'u', unit: 'kJ/kg', label: 'u' },
+      { id: 'h', symbol: 'h', unit: 'kJ/kg', label: 'h' },
+      { id: 's', symbol: 's', unit: 'kJ/kg · K', label: 's' },
+    ];
+  }
+
+  if (tableData.type === 'ideal_gas_air') {
+    return [
+      { id: 'T', symbol: 'T', unit: 'K', label: 'T', isIndex: true },
+      { id: 'h', symbol: 'h', unit: 'kJ/kg', label: 'h' },
+      { id: 'u', symbol: 'u', unit: 'kJ/kg', label: 'u' },
+      { id: 's_deg', symbol: 's', superscript: '°', unit: 'kJ/kg · K', label: 's°' },
+      { id: 's_plus', symbol: 's', superscript: '+', unit: 'kJ/kg · K', label: 's+' },
+    ];
+  }
+
+  if (tableData.type === 'ideal_gas_molar') {
+    return [
+      { id: 'T', symbol: 'T', unit: 'K', label: 'T', isIndex: true },
+      { id: 'h_bar', symbol: 'h', overbar: true, unit: 'kJ/kmol', label: 'h̄' },
+      { id: 'u_bar', symbol: 'u', overbar: true, unit: 'kJ/kmol', label: 'ū' },
+      {
+        id: 's_bar_deg',
+        symbol: 's',
+        overbar: true,
+        superscript: '°',
+        unit: 'kJ/kmol · K',
+        label: 's̄°',
+      },
+    ];
+  }
+
+  return [];
+}
+
+function computeInitialColIds(
+  allColumns: SnippetColumnDef[],
+  selectedCols: Set<string>
+): Set<string> {
+  const initialColIds = new Set(selectedCols);
+  const independentColumn = allColumns[0];
+  if (independentColumn) {
+    initialColIds.add(independentColumn.id);
+  }
+  return initialColIds;
+}
+
+function computeInitialBlockIdxs(
+  tableData: ThermoTableData | null | undefined,
+  pinnedBlocks: Set<number>,
+  touchedBlocks: Set<number>,
+  disabledBlocks: Set<number>
+): Set<number> {
+  if (!tableData || (tableData.type !== 'superheated' && tableData.type !== 'compressed')) {
+    return new Set<number>();
+  }
+  if (pinnedBlocks.size > 0) {
+    return new Set(pinnedBlocks);
+  }
+  if (touchedBlocks.size > 0) {
+    return new Set(touchedBlocks);
+  }
+  const firstVisible = tableData.blocks.findIndex(
+    (_, i) => !disabledBlocks.has(i)
+  );
+  return firstVisible >= 0 ? new Set([firstVisible]) : new Set([0]);
+}
+
+function buildRowGroups({
+  tableData,
+  pinnedRows,
+  pinnedTemps,
+  activeBlockIdxs,
+  allColumns,
+  formatTempDisplay,
+  formatPressDisplay,
+  formatIsobarPress,
+  formatSatTemp,
+}: {
+  tableData: ThermoTableData | null | undefined;
+  pinnedRows: Set<string>;
+  pinnedTemps: Set<string>;
+  activeBlockIdxs: Set<number>;
+  allColumns: SnippetColumnDef[];
+  formatTempDisplay: (val?: ThermoValue) => string;
+  formatPressDisplay: (val?: ThermoValue) => string;
+  formatIsobarPress: (val: ThermoValue) => string;
+  formatSatTemp: (val?: ThermoValue) => string;
+}): SnippetRowGroup[] {
+  if (!tableData) return [];
+
+  if (tableData.type === 'saturated') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          const cells: Record<string, string> = {
+            T: formatTempDisplay(row.T),
+            P: formatPressDisplay(row.P),
+          };
+          const rec = row as Record<string, ThermoValue | undefined>;
+          for (const col of allColumns) {
+            if (col.id !== 'T' && col.id !== 'P') {
+              cells[col.id] = rec[col.id]?.s ?? '-';
+            }
+          }
+          return { rowKey: idx.toString(), cells };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'superheated' || tableData.type === 'compressed') {
+    const sortedBlocks = Array.from(activeBlockIdxs)
+      .filter((bIdx) => bIdx >= 0 && bIdx < tableData.blocks.length)
+      .sort((a, b) => a - b);
+
+    const groups: SnippetRowGroup[] = [];
+
+    for (const bIdx of sortedBlocks) {
+      const block = tableData.blocks[bIdx];
+      if (!block) continue;
+
+      const matchingRows: { rowKey: string; cells: Record<string, string> }[] = [];
+
+      block.rows.forEach((row, rIdx) => {
+        const rKey = `${bIdx}-${rIdx}`;
+        const tempStr = row.isSaturationState ? 'Sat' : row.T?.s || '';
+        const isRowPinned =
+          (tempStr && pinnedTemps.has(tempStr)) || pinnedRows.has(rKey);
+
+        // Include row if it's pinned, or if no specific rows/temps are pinned at all (whole pinned block)
+        const hasAnyRowPin = pinnedTemps.size > 0 || pinnedRows.size > 0;
+        if (isRowPinned || !hasAnyRowPin) {
+          matchingRows.push({
+            rowKey: rKey,
+            cells: {
+              T: row.isSaturationState ? 'Sat.' : formatTempDisplay(row.T),
+              v: row.v.s,
+              u: row.u.s,
+              h: row.h.s,
+              s: row.s.s,
+            },
+          });
+        }
+      });
+
+      if (matchingRows.length > 0) {
+        const satPart =
+          block.Tsat.s !== 'N/A' ? ` (${formatSatTemp(block.Tsat)})` : '';
+        groups.push({
+          blockTitle: `P = ${formatIsobarPress(block.P)}${satPart}`,
+          rows: matchingRows,
+        });
+      }
+    }
+
+    return groups;
+  }
+
+  if (tableData.type === 'ideal_gas_air') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row: IdealGasAirRow = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              T: row.T.s,
+              h: row.h.s,
+              u: row.u.s,
+              s_deg: row.s_deg.s,
+              s_plus: row.s_plus?.s || '-',
+            },
+          };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'ideal_gas_molar') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row: IdealGasMolarRow = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              T: row.T.s,
+              h_bar: row.h_bar.s,
+              u_bar: row.u_bar.s,
+              s_bar_deg: row.s_bar_deg.s,
+            },
+          };
+        }),
+      },
+    ];
+  }
+
+  return [];
+}
+
+function computeInitialEmphasizedCells(
+  groups: SnippetRowGroup[],
+  selectedCols: Set<string>,
+  allColumns: SnippetColumnDef[]
+): Set<string> {
+  if (selectedCols.size === 0) return new Set();
+  const initial = new Set<string>();
+  for (const group of groups) {
+    for (const row of group.rows) {
+      for (const colId of selectedCols) {
+        const colDef = allColumns.find((c) => c.id === colId);
+        // Auto-emphasize non-index selected columns at pinned row intersections
+        if (colDef && !colDef.isIndex) {
+          initial.add(`${row.rowKey}::${colId}`);
+        }
+      }
+    }
+  }
+  return initial;
+}
+
+function SnippetModalDialog({
   onClose,
   tableMeta,
   tableData,
@@ -75,9 +403,9 @@ export function SnippetModal({
     (val?: ThermoValue) => {
       if (!val || val.s === 'N/A') return 'N/A';
       if (tempUnit === 'K') {
-        return `${(val.v + 273.15).toFixed(2)} K`;
+        return `Tsat = ${(val.v + 273.15).toFixed(2)} K`;
       }
-      return `${val.s} °C`;
+      return `Tsat = ${val.s} °C`;
     },
     [tempUnit]
   );
@@ -110,261 +438,62 @@ export function SnippetModal({
   );
 
   // Build all available columns for the current table
-  const allColumns = useMemo<SnippetColumnDef[]>(() => {
-    if (!tableData) return [];
+  const allColumns = useMemo(
+    () => buildAllColumns(tableMeta, tableData, tempUnit, pressUnit, visibleCols),
+    [tableMeta, tableData, tempUnit, pressUnit, visibleCols]
+  );
 
-    if (tableData.type === 'saturated') {
-      const isIce = tableMeta.id === 'A-8';
-      const tCol: SnippetColumnDef = {
-        id: 'T',
-        symbol: 'T',
-        subscript: tableData.indexProperty === 'P' ? 'sat' : undefined,
-        unit: tempUnit === 'K' ? 'K' : '°C',
-        label: tableData.indexProperty === 'P' ? 'Tsat' : 'Temp',
-        isIndex: true,
-      };
-      const pCol: SnippetColumnDef = {
-        id: 'P',
-        symbol: 'P',
-        subscript: tableData.indexProperty === 'T' ? 'sat' : undefined,
-        unit: pressUnit,
-        label: tableData.indexProperty === 'T' ? 'Psat' : 'Press',
-        isIndex: true,
-      };
+  // Synchronous atomic initial states on modal open
+  const initialColIds = useMemo(
+    () => computeInitialColIds(allColumns, selectedCols),
+    [allColumns, selectedCols]
+  );
 
-      const cols: SnippetColumnDef[] =
-        tableData.indexProperty === 'T' ? [tCol, pCol] : [pCol, tCol];
+  const initialBlockIdxs = useMemo(
+    () =>
+      computeInitialBlockIdxs(
+        tableData,
+        pinnedBlocks,
+        touchedBlocks,
+        disabledBlocks
+      ),
+    [tableData, pinnedBlocks, touchedBlocks, disabledBlocks]
+  );
 
-      if (visibleCols.volume) {
-        cols.push(
-          isIce
-            ? { id: 'vi', symbol: 'v', subscript: 'i', unit: 'm³/kg', label: 'vi' }
-            : { id: 'vf', symbol: 'v', subscript: 'f', unit: 'm³/kg', label: 'vf' },
-          { id: 'vg', symbol: 'v', subscript: 'g', unit: 'm³/kg', label: 'vg' }
-        );
-      }
-      if (visibleCols.energy) {
-        cols.push(
-          isIce
-            ? { id: 'ui', symbol: 'u', subscript: 'i', unit: 'kJ/kg', label: 'ui' }
-            : { id: 'uf', symbol: 'u', subscript: 'f', unit: 'kJ/kg', label: 'uf' },
-          isIce
-            ? { id: 'uig', symbol: 'u', subscript: 'ig', unit: 'kJ/kg', label: 'uig' }
-            : { id: 'ufg', symbol: 'u', subscript: 'fg', unit: 'kJ/kg', label: 'ufg' },
-          { id: 'ug', symbol: 'u', subscript: 'g', unit: 'kJ/kg', label: 'ug' }
-        );
-      }
-      if (visibleCols.enthalpy) {
-        cols.push(
-          isIce
-            ? { id: 'hi', symbol: 'h', subscript: 'i', unit: 'kJ/kg', label: 'hi' }
-            : { id: 'hf', symbol: 'h', subscript: 'f', unit: 'kJ/kg', label: 'hf' },
-          isIce
-            ? { id: 'hig', symbol: 'h', subscript: 'ig', unit: 'kJ/kg', label: 'hig' }
-            : { id: 'hfg', symbol: 'h', subscript: 'fg', unit: 'kJ/kg', label: 'hfg' },
-          { id: 'hg', symbol: 'h', subscript: 'g', unit: 'kJ/kg', label: 'hg' }
-        );
-      }
-      if (visibleCols.entropy) {
-        cols.push(
-          isIce
-            ? { id: 'si', symbol: 's', subscript: 'i', unit: 'kJ/kg · K', label: 'si' }
-            : { id: 'sf', symbol: 's', subscript: 'f', unit: 'kJ/kg · K', label: 'sf' },
-          isIce
-            ? { id: 'sig', symbol: 's', subscript: 'ig', unit: 'kJ/kg · K', label: 'sig' }
-            : { id: 'sfg', symbol: 's', subscript: 'fg', unit: 'kJ/kg · K', label: 'sfg' },
-          { id: 'sg', symbol: 's', subscript: 'g', unit: 'kJ/kg · K', label: 'sg' }
-        );
-      }
-      return cols;
-    }
-
-    if (tableData.type === 'superheated' || tableData.type === 'compressed') {
-      return [
-        {
-          id: 'T',
-          symbol: 'T',
-          unit: tempUnit === 'K' ? 'K' : '°C',
-          label: 'Temp',
-          isIndex: true,
-        },
-        { id: 'v', symbol: 'v', unit: 'm³/kg', label: 'v' },
-        { id: 'u', symbol: 'u', unit: 'kJ/kg', label: 'u' },
-        { id: 'h', symbol: 'h', unit: 'kJ/kg', label: 'h' },
-        { id: 's', symbol: 's', unit: 'kJ/kg · K', label: 's' },
-      ];
-    }
-
-    if (tableData.type === 'ideal_gas_air') {
-      return [
-        { id: 'T', symbol: 'T', unit: 'K', label: 'T', isIndex: true },
-        { id: 'h', symbol: 'h', unit: 'kJ/kg', label: 'h' },
-        { id: 'u', symbol: 'u', unit: 'kJ/kg', label: 'u' },
-        { id: 's_deg', symbol: 's', superscript: '°', unit: 'kJ/kg · K', label: 's°' },
-        { id: 's_plus', symbol: 's', superscript: '+', unit: 'kJ/kg · K', label: 's+' },
-      ];
-    }
-
-    if (tableData.type === 'ideal_gas_molar') {
-      return [
-        { id: 'T', symbol: 'T', unit: 'K', label: 'T', isIndex: true },
-        { id: 'h_bar', symbol: 'h', overbar: true, unit: 'kJ/kmol', label: 'h̄' },
-        { id: 'u_bar', symbol: 'u', overbar: true, unit: 'kJ/kmol', label: 'ū' },
-        {
-          id: 's_bar_deg',
-          symbol: 's',
-          overbar: true,
-          superscript: '°',
-          unit: 'kJ/kmol · K',
-          label: 's̄°',
-        },
-      ];
-    }
-
-    return [];
-  }, [tableData, tableMeta.id, tempUnit, pressUnit, visibleCols]);
-
-  // Active columns inside the snippet modal (initialized when modal opens)
-  const [activeColIds, setActiveColIds] = useState<Set<string>>(new Set());
+  // Active columns inside the snippet modal
+  const [activeColIds, setActiveColIds] = useState<Set<string>>(() => initialColIds);
   // Active block indices for superheated/compressed tables
-  const [activeBlockIdxs, setActiveBlockIdxs] = useState<Set<number>>(new Set());
-  // Emphasized cells "${rowKey}::${colId}"
-  const [emphasizedCells, setEmphasizedCells] = useState<Set<string>>(new Set());
+  const [activeBlockIdxs, setActiveBlockIdxs] = useState<Set<number>>(() => initialBlockIdxs);
 
-  // Build row groups based on pinned rows / blocks
+  // Emphasized cells "${rowKey}::${colId}" initialized synchronously from initial row groups
+  const [emphasizedCells, setEmphasizedCells] = useState<Set<string>>(() => {
+    const initialGroups = buildRowGroups({
+      tableData,
+      pinnedRows,
+      pinnedTemps,
+      activeBlockIdxs: initialBlockIdxs,
+      allColumns,
+      formatTempDisplay,
+      formatPressDisplay,
+      formatIsobarPress,
+      formatSatTemp,
+    });
+    return computeInitialEmphasizedCells(initialGroups, selectedCols, allColumns);
+  });
+
+  // Build row groups based on active blocks and pinned rows / temps
   const rowGroups = useMemo<SnippetRowGroup[]>(() => {
-    if (!tableData) return [];
-
-    if (tableData.type === 'saturated') {
-      const sortedRowIndices = Array.from(pinnedRows)
-        .map((k) => parseInt(k, 10))
-        .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
-        .sort((a, b) => a - b);
-
-      if (sortedRowIndices.length === 0) return [];
-
-      return [
-        {
-          rows: sortedRowIndices.map((idx) => {
-            const row = tableData.rows[idx];
-            const cells: Record<string, string> = {
-              T: formatTempDisplay(row.T),
-              P: formatPressDisplay(row.P),
-            };
-            const rec = row as Record<string, ThermoValue | undefined>;
-            for (const col of allColumns) {
-              if (col.id !== 'T' && col.id !== 'P') {
-                cells[col.id] = rec[col.id]?.s ?? '-';
-              }
-            }
-            return { rowKey: idx.toString(), cells };
-          }),
-        },
-      ];
-    }
-
-    if (tableData.type === 'superheated' || tableData.type === 'compressed') {
-      const sortedBlocks = Array.from(activeBlockIdxs)
-        .filter((bIdx) => bIdx >= 0 && bIdx < tableData.blocks.length)
-        .sort((a, b) => a - b);
-
-      const groups: SnippetRowGroup[] = [];
-
-      for (const bIdx of sortedBlocks) {
-        const block = tableData.blocks[bIdx];
-        if (!block) continue;
-
-        const matchingRows: { rowKey: string; cells: Record<string, string> }[] = [];
-
-        block.rows.forEach((row, rIdx) => {
-          const rKey = `${bIdx}-${rIdx}`;
-          const tempStr = row.isSaturationState ? 'Sat' : row.T?.s || '';
-          const isRowPinned =
-            (tempStr && pinnedTemps.has(tempStr)) || pinnedRows.has(rKey);
-
-          // Include row if it's pinned, or if no specific rows/temps are pinned at all (whole pinned block)
-          const hasAnyRowPin = pinnedTemps.size > 0 || pinnedRows.size > 0;
-          if (isRowPinned || !hasAnyRowPin) {
-            matchingRows.push({
-              rowKey: rKey,
-              cells: {
-                T: row.isSaturationState ? 'Sat.' : formatTempDisplay(row.T),
-                v: row.v.s,
-                u: row.u.s,
-                h: row.h.s,
-                s: row.s.s,
-              },
-            });
-          }
-        });
-
-        if (matchingRows.length > 0) {
-          const satPart =
-            block.Tsat.s !== 'N/A' ? ` (${formatSatTemp(block.Tsat)})` : '';
-          groups.push({
-            blockTitle: `P = ${formatIsobarPress(block.P)}${satPart}`,
-            rows: matchingRows,
-          });
-        }
-      }
-
-      return groups;
-    }
-
-    if (tableData.type === 'ideal_gas_air') {
-      const sortedRowIndices = Array.from(pinnedRows)
-        .map((k) => parseInt(k, 10))
-        .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
-        .sort((a, b) => a - b);
-
-      if (sortedRowIndices.length === 0) return [];
-
-      return [
-        {
-          rows: sortedRowIndices.map((idx) => {
-            const row: IdealGasAirRow = tableData.rows[idx];
-            return {
-              rowKey: idx.toString(),
-              cells: {
-                T: row.T.s,
-                h: row.h.s,
-                u: row.u.s,
-                s_deg: row.s_deg.s,
-                s_plus: row.s_plus?.s || '-',
-              },
-            };
-          }),
-        },
-      ];
-    }
-
-    if (tableData.type === 'ideal_gas_molar') {
-      const sortedRowIndices = Array.from(pinnedRows)
-        .map((k) => parseInt(k, 10))
-        .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
-        .sort((a, b) => a - b);
-
-      if (sortedRowIndices.length === 0) return [];
-
-      return [
-        {
-          rows: sortedRowIndices.map((idx) => {
-            const row: IdealGasMolarRow = tableData.rows[idx];
-            return {
-              rowKey: idx.toString(),
-              cells: {
-                T: row.T.s,
-                h_bar: row.h_bar.s,
-                u_bar: row.u_bar.s,
-                s_bar_deg: row.s_bar_deg.s,
-              },
-            };
-          }),
-        },
-      ];
-    }
-
-    return [];
+    return buildRowGroups({
+      tableData,
+      pinnedRows,
+      pinnedTemps,
+      activeBlockIdxs,
+      allColumns,
+      formatTempDisplay,
+      formatPressDisplay,
+      formatIsobarPress,
+      formatSatTemp,
+    });
   }, [
     tableData,
     pinnedRows,
@@ -377,79 +506,25 @@ export function SnippetModal({
     formatSatTemp,
   ]);
 
-  // Initialize modal state whenever it opens
-  useEffect(() => {
-    if (!isOpen || !tableData) return;
-
-    // 1. Determine active columns:
-    // Include highlighted columns plus the table's leftmost independent variable by default.
-    // This only initializes the modal, so users can still toggle that column off afterward.
-    const initialColIds = new Set(selectedCols);
-    const independentColumn = allColumns[0];
-    if (independentColumn) {
-      initialColIds.add(independentColumn.id);
-    }
-    setActiveColIds(initialColIds);
-
-    // 2. Determine active blocks for superheated/compressed:
-    if (tableData.type === 'superheated' || tableData.type === 'compressed') {
-      if (pinnedBlocks.size > 0) {
-        setActiveBlockIdxs(new Set(pinnedBlocks));
-      } else if (touchedBlocks.size > 0) {
-        setActiveBlockIdxs(new Set(touchedBlocks));
-      } else {
-        // Default to first visible block if rows were pinned
-        const firstVisible = tableData.blocks.findIndex(
-          (_, i) => !disabledBlocks.has(i)
-        );
-        setActiveBlockIdxs(firstVisible >= 0 ? new Set([firstVisible]) : new Set([0]));
-      }
-    }
-  }, [
-    isOpen,
-    tableData,
-    selectedCols,
-    allColumns,
-    pinnedBlocks,
-    touchedBlocks,
-    disabledBlocks,
-  ]);
-
-  // Initialize intersection emphasis when modal opens
-  useEffect(() => {
-    if (!isOpen) return;
-    if (selectedCols.size === 0) {
-      setEmphasizedCells(new Set());
-      return;
-    }
-    const initialEmphasized = new Set<string>();
-    for (const group of rowGroups) {
-      for (const row of group.rows) {
-        for (const colId of selectedCols) {
-          const colDef = allColumns.find((c) => c.id === colId);
-          // Auto-emphasize non-index selected columns at pinned row intersections
-          if (colDef && !colDef.isIndex) {
-            initialEmphasized.add(`${row.rowKey}::${colId}`);
-          }
-        }
-      }
-    }
-    setEmphasizedCells(initialEmphasized);
-    // Only run when modal first opens or rowGroups first populate on open
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
-
   const orderedActiveColumns = useMemo(
     () => allColumns.filter((c) => activeColIds.has(c.id)),
     [allColumns, activeColIds]
   );
 
-  const [renderResult, setRenderResult] = useState<SnippetRenderResult | null>(
-    null
-  );
-  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>(
-    'idle'
-  );
+  const [renderResult, setRenderResult] = useState<SnippetRenderResult | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
+  const urlRef = useRef<string | null>(null);
+
+  // Clean up any active object URL on unmount
+  useEffect(() => {
+    return () => {
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+      }
+    };
+  }, []);
 
   const canNativeShare = useMemo(() => {
     return (
@@ -461,8 +536,7 @@ export function SnippetModal({
 
   // Render canvas whenever configuration changes
   useEffect(() => {
-    if (!isOpen || rowGroups.length === 0 || orderedActiveColumns.length === 0) {
-      setRenderResult(null);
+    if (rowGroups.length === 0 || orderedActiveColumns.length === 0) {
       return;
     }
 
@@ -476,7 +550,13 @@ export function SnippetModal({
     })
       .then((res) => {
         if (!cancelled) {
+          if (urlRef.current) {
+            URL.revokeObjectURL(urlRef.current);
+          }
+          const url = URL.createObjectURL(res.blob);
+          urlRef.current = url;
           setRenderResult(res);
+          setPreviewUrl(url);
         }
       })
       .catch((err) => {
@@ -486,7 +566,7 @@ export function SnippetModal({
     return () => {
       cancelled = true;
     };
-  }, [isOpen, tableMeta, orderedActiveColumns, rowGroups, emphasizedCells]);
+  }, [tableMeta, orderedActiveColumns, rowGroups, emphasizedCells]);
 
   const handleCopyImage = useCallback(async () => {
     if (!renderResult) return;
@@ -506,15 +586,15 @@ export function SnippetModal({
   }, [renderResult]);
 
   const handleDownloadImage = useCallback(() => {
-    if (!renderResult) return;
+    if (!previewUrl) return;
     const a = document.createElement('a');
-    a.href = renderResult.dataUrl;
+    a.href = previewUrl;
     const cleanId = tableMeta.id.toLowerCase();
     a.download = `thermo-table-${cleanId}-snippet.png`;
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-  }, [renderResult, tableMeta.id]);
+  }, [previewUrl, tableMeta.id]);
 
   const handleShareImage = useCallback(async () => {
     if (!renderResult) return;
@@ -541,7 +621,6 @@ export function SnippetModal({
 
   // Keyboard shortcuts inside modal (Escape to close, Ctrl/Cmd+C to copy image)
   useEffect(() => {
-    if (!isOpen) return;
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         e.preventDefault();
@@ -556,7 +635,7 @@ export function SnippetModal({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, onClose, handleCopyImage]);
+  }, [onClose, handleCopyImage]);
 
   const toggleColumn = (colId: string) => {
     setActiveColIds((prev) => {
@@ -579,8 +658,6 @@ export function SnippetModal({
       return next;
     });
   };
-
-  if (!isOpen) return null;
 
   const hasRows = rowGroups.length > 0;
   const isSuperheated =
@@ -786,7 +863,7 @@ export function SnippetModal({
                         Select one or more columns above (or click &quot;All&quot;) to generate your snippet.
                       </p>
                     </div>
-                  ) : renderResult ? (
+                  ) : renderResult && previewUrl ? (
                     <div
                       className="relative inline-block shadow-md rounded-xs overflow-hidden select-none shrink-0"
                       style={{
@@ -794,11 +871,13 @@ export function SnippetModal({
                         maxWidth: '100%',
                       }}
                     >
-                      <img
-                        src={renderResult.dataUrl}
-                        alt={`${tableMeta.name} snippet`}
-                        className="block w-full h-auto"
-                      />
+                      {previewUrl && (
+                        <img
+                          src={previewUrl}
+                          alt={`${tableMeta.name} snippet`}
+                          className="block w-full h-auto"
+                        />
+                      )}
                       {/* Transparent interactive hitboxes mapped over each value cell */}
                       {renderResult.hitboxes.map((hb) => {
                         const key = `${hb.rowKey}::${hb.colId}`;
@@ -848,7 +927,7 @@ export function SnippetModal({
             <button
               type="button"
               onClick={handleDownloadImage}
-              disabled={!renderResult || orderedActiveColumns.length === 0}
+              disabled={!renderResult || !previewUrl || orderedActiveColumns.length === 0}
               className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs sm:text-sm font-semibold bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer disabled:opacity-50"
             >
               <Download className="w-4 h-4" />
@@ -859,7 +938,7 @@ export function SnippetModal({
               <button
                 type="button"
                 onClick={handleShareImage}
-                disabled={!renderResult || orderedActiveColumns.length === 0}
+                disabled={!renderResult || !previewUrl || orderedActiveColumns.length === 0}
                 className="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md text-xs sm:text-sm font-semibold bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-200 border border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors cursor-pointer disabled:opacity-50"
               >
                 <Share2 className="w-4 h-4" />
@@ -899,4 +978,9 @@ export function SnippetModal({
     </div>,
     document.body
   );
+}
+
+export function SnippetModal(props: SnippetModalProps) {
+  if (!props.isOpen) return null;
+  return <SnippetModalDialog {...props} />;
 }

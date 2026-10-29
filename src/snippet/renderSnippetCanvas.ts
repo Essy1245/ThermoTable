@@ -49,7 +49,6 @@ export interface SnippetCellHitbox {
 }
 
 export interface SnippetRenderResult {
-  dataUrl: string;
   blob: Blob;
   width: number;
   height: number;
@@ -566,7 +565,6 @@ export async function renderSnippetCanvas(
     }
   }
 
-  const dataUrl = canvas.toDataURL('image/png');
   const blob = await new Promise<Blob>((resolve, reject) => {
     canvas.toBlob((b) => {
       if (b) resolve(b);
@@ -575,7 +573,6 @@ export async function renderSnippetCanvas(
   });
 
   return {
-    dataUrl,
     blob,
     width: logicalWidth,
     height: logicalHeight,
