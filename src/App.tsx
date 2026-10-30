@@ -148,8 +148,8 @@ const Td = React.memo(function Td({
   isCategoryEnd,
   isColHovered,
   isColSelected,
-  onMouseEnterCol,
-  onMouseLeaveCol,
+  onMouseEnterCol: _onMouseEnterCol,
+  onMouseLeaveCol: _onMouseLeaveCol,
 }: {
   children: React.ReactNode;
   colId: string;
@@ -159,8 +159,8 @@ const Td = React.memo(function Td({
   isCategoryEnd?: boolean;
   isColHovered: boolean;
   isColSelected: boolean;
-  onMouseEnterCol: (id: string) => void;
-  onMouseLeaveCol: () => void;
+  onMouseEnterCol?: (id: string) => void;
+  onMouseLeaveCol?: () => void;
 }) {
   let bgStyle = "";
   if (isHighlighted) {
@@ -191,8 +191,6 @@ const Td = React.memo(function Td({
         isCategoryEnd ? "border-r-2 border-r-gray-300 dark:border-r-gray-700" : "border-r border-r-gray-100 dark:border-r-gray-800/80",
         bgStyle
       )}
-      onMouseEnter={() => onMouseEnterCol(colId)}
-      onMouseLeave={onMouseLeaveCol}
     >
       {children}
     </td>
@@ -202,6 +200,7 @@ const Td = React.memo(function Td({
 export default function App() {
   const [currentTableId, setCurrentTableId] = useState<string>('A-4');
   const [isSwitcherOpen, setIsSwitcherOpen] = useState<boolean>(false);
+  const [isSnippetOpen, setIsSnippetOpen] = useState<boolean>(false);
   const [tableSearchQuery, setTableSearchQuery] = useState<string>('');
 
   const currentTable = SUPPORTED_TABLES.find(t => t.id === currentTableId) || SUPPORTED_TABLES[0];
@@ -223,15 +222,30 @@ export default function App() {
   const [hoveredRow, setHoveredRow] = useState<string | null>(null);
   const [hoveredCol, setHoveredCol] = useState<string | null>(null);
 
-  const handleMouseEnterCol = useCallback((colId: string) => setHoveredCol(colId), []);
-  const handleMouseLeaveCol = useCallback(() => setHoveredCol(null), []);
+  const handleMouseEnterCol = useCallback((colId: string) => {
+    setHoveredCol(prev => (prev === colId ? prev : colId));
+  }, []);
+  const handleMouseLeaveCol = useCallback(() => {
+    setHoveredCol(prev => (prev !== null ? null : prev));
+  }, []);
   const clearAllHover = useCallback(() => {
-    setHoveredCol(prev => (prev === null ? null : null));
-    setHoveredRow(prev => (prev === null ? null : null));
+    setHoveredCol(prev => (prev !== null ? null : prev));
+    setHoveredRow(prev => (prev !== null ? null : prev));
   }, []);
   const handleRootMouseMove = useCallback((e: React.MouseEvent) => {
+    if (isSnippetOpen || isSwitcherOpen) {
+      clearAllHover();
+      return;
+    }
+    if (e.clientX <= 0 || e.clientY <= 0 || e.clientX >= window.innerWidth || e.clientY >= window.innerHeight) {
+      clearAllHover();
+      return;
+    }
     const target = e.target as HTMLElement | null;
-    if (!target) return;
+    if (!target) {
+      clearAllHover();
+      return;
+    }
     const colEl = target.closest('[data-col-id]') as HTMLElement | null;
     const cellEl = colEl || (target.closest('[data-pin-cell]') as HTMLElement | null);
     const rowEl = cellEl ? (cellEl.closest('[data-row-key]') as HTMLElement | null) : null;
@@ -239,18 +253,51 @@ export default function App() {
     const nextRow = rowEl ? rowEl.getAttribute('data-row-key') : null;
     setHoveredCol(prev => (prev === nextCol ? prev : nextCol));
     setHoveredRow(prev => (prev === nextRow ? prev : nextRow));
-  }, []);
+  }, [clearAllHover, isSnippetOpen, isSwitcherOpen]);
 
   useEffect(() => {
     const handleDocLeave = () => {
-      setHoveredCol(null);
-      setHoveredRow(null);
+      setHoveredCol(prev => (prev !== null ? null : prev));
+      setHoveredRow(prev => (prev !== null ? null : prev));
     };
+
+    const handleMouseOut = (e: MouseEvent) => {
+      if (!e.relatedTarget && !(e as any).toElement) {
+        handleDocLeave();
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        handleDocLeave();
+      }
+    };
+
+    // Chromium/WebKit fires mouseleave/pointerleave on document.documentElement, not document
+    document.documentElement.addEventListener('mouseleave', handleDocLeave);
+    document.documentElement.addEventListener('pointerleave', handleDocLeave);
     document.addEventListener('mouseleave', handleDocLeave);
+    document.addEventListener('mouseout', handleMouseOut);
+    window.addEventListener('mouseout', handleMouseOut);
     window.addEventListener('blur', handleDocLeave);
+    window.addEventListener('pointercancel', handleDocLeave);
+    window.addEventListener('touchend', handleDocLeave, { passive: true });
+    window.addEventListener('touchcancel', handleDocLeave, { passive: true });
+    window.addEventListener('scroll', handleDocLeave, { capture: true, passive: true });
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
+      document.documentElement.removeEventListener('mouseleave', handleDocLeave);
+      document.documentElement.removeEventListener('pointerleave', handleDocLeave);
       document.removeEventListener('mouseleave', handleDocLeave);
+      document.removeEventListener('mouseout', handleMouseOut);
+      window.removeEventListener('mouseout', handleMouseOut);
       window.removeEventListener('blur', handleDocLeave);
+      window.removeEventListener('pointercancel', handleDocLeave);
+      window.removeEventListener('touchend', handleDocLeave);
+      window.removeEventListener('touchcancel', handleDocLeave);
+      window.removeEventListener('scroll', handleDocLeave, { capture: true });
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 
@@ -260,7 +307,6 @@ export default function App() {
   const [tableDisabledBlocks, setTableDisabledBlocks] = useState<Record<string, Set<number>>>({});
   const [showBlockFilter, setShowBlockFilter] = useState(false);
   const [tablePinnedTemps, setTablePinnedTemps] = useState<Record<string, Set<string>>>({});
-  const [isSnippetOpen, setIsSnippetOpen] = useState<boolean>(false);
 
   const pinnedRows = useMemo(() => tablePinnedRows[currentTableId] || new Set<string>(), [tablePinnedRows, currentTableId]);
   const pinnedTemps = useMemo(() => tablePinnedTemps[currentTableId] || new Set<string>(), [tablePinnedTemps, currentTableId]);
@@ -324,6 +370,7 @@ export default function App() {
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
   const switchTable = (id: string) => {
+    clearAllHover();
     setCurrentTableId(id);
     const targetData = getTableData(id);
     if (targetData && (targetData.type === 'superheated' || targetData.type === 'compressed')) {
@@ -1439,7 +1486,7 @@ export default function App() {
                 </div>
 
                 {/* Main Scrollable Area */}
-                <div className="flex-1 overflow-y-auto relative p-1.5 sm:p-4 flex flex-col gap-3 sm:gap-6">
+                <div className="flex-1 overflow-y-auto relative p-1.5 sm:p-4 flex flex-col gap-3 sm:gap-6" onMouseLeave={clearAllHover}>
                   
                   {/* Pinned Section (Top Row) */}
                   {pinnedBlocks.size > 0 && (
