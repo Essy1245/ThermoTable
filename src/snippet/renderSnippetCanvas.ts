@@ -16,13 +16,19 @@ export interface SnippetColumnDef {
   isIndex?: boolean;
 }
 
+export interface SnippetRowItem {
+  rowKey: string;
+  cells: Record<string, string>;
+  /** If true, this row is an empty vertical space for user handwriting */
+  isEmptySpace?: boolean;
+  /** Height in pixels for this empty space (default to dataRowH = 30px) */
+  emptySpaceHeight?: number;
+}
+
 export interface SnippetRowGroup {
   /** Optional subheader for superheated/compressed isobar blocks, e.g. "P = 0.10 MPa (Tsat = 99.61 °C)" */
   blockTitle?: string;
-  rows: {
-    rowKey: string;
-    cells: Record<string, string>;
-  }[];
+  rows: SnippetRowItem[];
 }
 
 export interface SnippetRenderConfig {
@@ -180,10 +186,7 @@ function drawRoundedRect(
 
 interface DisplayGroup {
   blockTitle?: string;
-  rows: {
-    rowKey: string;
-    cells: Record<string, string>;
-  }[];
+  rows: SnippetRowItem[];
 }
 
 export async function renderSnippetCanvas(
@@ -235,6 +238,7 @@ export async function renderSnippetCanvas(
     mCtx.font = `400 15px ${TEXTBOOK_SERIF}`;
     for (const group of config.groups) {
       for (const row of group.rows) {
+        if (row.isEmptySpace) continue;
         const val = row.cells[col.id] ?? '-';
         const w = mCtx.measureText(val).width;
         if (w > maxW) maxW = w;
@@ -294,7 +298,11 @@ export async function renderSnippetCanvas(
   // Estimate block heights
   const blockHeights = displayBlocks.map((b) => {
     const subH = b.blockTitle ? blockSubheaderH : 0;
-    return subH + headerRowH + afterHeaderPad + b.rows.length * dataRowH;
+    const contentH = b.rows.reduce(
+      (sum, r) => sum + (r.isEmptySpace ? (r.emptySpaceHeight ?? dataRowH) : dataRowH),
+      0
+    );
+    return subH + headerRowH + afterHeaderPad + contentH;
   });
 
   // Calculate the optimal number of columns C (1..4) to grow as square as possible (aspect ratio ≈ 1.0)
@@ -384,7 +392,11 @@ export async function renderSnippetCanvas(
     let h = 0;
     for (let bIdx = 0; bIdx < blocksInTrack.length; bIdx++) {
       const b = blocksInTrack[bIdx];
-      h += (b.blockTitle ? blockSubheaderH : 0) + headerRowH + afterHeaderPad + b.rows.length * dataRowH;
+      const contentH = b.rows.reduce(
+        (sum, r) => sum + (r.isEmptySpace ? (r.emptySpaceHeight ?? dataRowH) : dataRowH),
+        0
+      );
+      h += (b.blockTitle ? blockSubheaderH : 0) + headerRowH + afterHeaderPad + contentH;
       if (bIdx < blocksInTrack.length - 1) {
         h += afterGroupPad;
       }
@@ -516,6 +528,12 @@ export async function renderSnippetCanvas(
 
       // Data Rows
       for (const row of block.rows) {
+        if (row.isEmptySpace) {
+          const rowH = row.emptySpaceHeight ?? dataRowH;
+          trackCurY += rowH;
+          continue;
+        }
+
         let cellX = trackLeftX;
         const rowCenterY = trackCurY + dataRowH / 2;
 
