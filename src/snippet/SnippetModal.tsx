@@ -379,19 +379,20 @@ function computeInitialEmphasizedCells(
   return initial;
 }
 
-function getRowShortLabel(
+function getRowSecondarySummary(
   row: { rowKey: string; cells: Record<string, string> },
   orderedActiveColumns: SnippetColumnDef[]
 ): string {
   const parts: string[] = [];
   for (const col of orderedActiveColumns) {
+    if (col.isIndex) continue;
     const val = row.cells[col.id];
     if (val && val !== '-') {
-      parts.push(`${col.label || col.symbol} = ${val}${col.unit ? ` ${col.unit}` : ''}`);
-      if (parts.length >= 2) break;
+      parts.push(`${col.label} = ${val}`);
+      if (parts.length >= 3) break;
     }
   }
-  return parts.length > 0 ? parts.join(', ') : `Row ${row.rowKey}`;
+  return parts.join(' · ');
 }
 
 function getRowBadgeLabel(
@@ -433,17 +434,17 @@ function ActiveSpaceItem({
   onRemove,
 }: ActiveSpaceItemProps) {
   return (
-    <div className="flex items-center justify-between gap-2 px-3 py-1.5 bg-amber-50 dark:bg-amber-950/40 border border-dashed border-amber-300 dark:border-amber-700/80 rounded-md">
-      <div className="flex items-center gap-2 min-w-0">
-        <PenLine className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400 shrink-0" />
-        <span className="text-xs font-semibold text-amber-900 dark:text-amber-200 truncate">
-          {label} ({height} row{height > 1 ? 's' : ''}, {Math.round(height * 30)}px)
+    <div className="flex items-center justify-between gap-2 px-2.5 py-1 bg-amber-50 dark:bg-amber-950/40 border border-dashed border-amber-300 dark:border-amber-700/80 rounded-md">
+      <div className="flex items-center gap-1.5 min-w-0">
+        <PenLine className="w-3 h-3 text-amber-600 dark:text-amber-400 shrink-0" />
+        <span className="text-[11px] font-semibold text-amber-900 dark:text-amber-200 truncate">
+          {label}
+        </span>
+        <span className="text-[10px] text-amber-700/80 dark:text-amber-300/70 font-mono shrink-0">
+          ({Math.round(height * 30)}px)
         </span>
       </div>
       <div className="flex items-center gap-1 shrink-0">
-        <span className="text-[11px] text-gray-500 dark:text-gray-400 mr-1 hidden sm:inline">
-          Height:
-        </span>
         <button
           type="button"
           onClick={() => onAdjust(-0.5)}
@@ -453,7 +454,7 @@ function ActiveSpaceItem({
         >
           <Minus className="w-3 h-3" />
         </button>
-        <span className="text-xs font-mono font-medium px-1 min-w-[32px] text-center">
+        <span className="text-[11px] font-mono font-semibold px-1 min-w-[28px] text-center text-amber-900 dark:text-amber-200">
           {height}x
         </span>
         <button
@@ -468,12 +469,180 @@ function ActiveSpaceItem({
         <button
           type="button"
           onClick={onRemove}
-          className="ml-1 p-1 text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded transition-colors cursor-pointer"
+          className="ml-0.5 p-0.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 rounded transition-colors cursor-pointer"
           title="Remove this blank space"
         >
           <X className="w-3.5 h-3.5" />
         </button>
       </div>
+    </div>
+  );
+}
+
+interface UnifiedGroupRowsProps {
+  group: SnippetRowGroup;
+  tableData: ThermoTableData | null | undefined;
+  tempUnit: TempUnit;
+  pressUnit: PressUnit;
+  orderedActiveColumns: SnippetColumnDef[];
+  disabledRowKeys: Set<string>;
+  emptySpaces: Record<string, { heightInRows: number }>;
+  onToggleRow: (rowKey: string) => void;
+  onAddSpace: (slotKey: string) => void;
+  onRemoveSpace: (slotKey: string) => void;
+  onAdjustSpaceHeight: (slotKey: string, delta: number) => void;
+}
+
+function UnifiedGroupRows({
+  group,
+  tableData,
+  tempUnit,
+  pressUnit,
+  orderedActiveColumns,
+  disabledRowKeys,
+  emptySpaces,
+  onToggleRow,
+  onAddSpace,
+  onRemoveSpace,
+  onAdjustSpaceHeight,
+}: UnifiedGroupRowsProps) {
+  const enabledRows = group.rows.filter((r) => !disabledRowKeys.has(r.rowKey));
+  const enabledIndexByRowKey = new Map<string, number>();
+  enabledRows.forEach((r, idx) => {
+    enabledIndexByRowKey.set(r.rowKey, idx);
+  });
+
+  const firstEnabledRow = enabledRows[0];
+  const lastEnabledRow = enabledRows[enabledRows.length - 1];
+
+  const beforeKey = firstEnabledRow ? `before::${firstEnabledRow.rowKey}` : '';
+  const isBeforeActive = beforeKey ? Boolean(emptySpaces[beforeKey]) : false;
+  const beforeHeight = beforeKey ? (emptySpaces[beforeKey]?.heightInRows ?? 1) : 1;
+
+  const afterKey = lastEnabledRow ? `after::${lastEnabledRow.rowKey}` : '';
+  const isAfterActive = afterKey ? Boolean(emptySpaces[afterKey]) : false;
+  const afterHeight = afterKey ? (emptySpaces[afterKey]?.heightInRows ?? 1) : 1;
+
+  return (
+    <div className="flex flex-col gap-1">
+      {/* Top Blank Space Slot */}
+      {beforeKey && (
+        isBeforeActive ? (
+          <ActiveSpaceItem
+            label="Blank Space (Top)"
+            height={beforeHeight}
+            onAdjust={(delta) => onAdjustSpaceHeight(beforeKey, delta)}
+            onRemove={() => onRemoveSpace(beforeKey)}
+          />
+        ) : (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => onAddSpace(beforeKey)}
+              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-medium text-gray-500 hover:text-amber-700 dark:text-gray-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-dashed border-gray-300 dark:border-gray-700 hover:border-amber-400 transition-colors cursor-pointer"
+            >
+              <Plus className="w-3 h-3 text-amber-600" />
+              <span>Space at top</span>
+            </button>
+          </div>
+        )
+      )}
+
+      {/* Unified Rows & Inline Between-Space Slots */}
+      {group.rows.map((row) => {
+        const isEnabled = !disabledRowKeys.has(row.rowKey);
+        const enabledIdx = enabledIndexByRowKey.get(row.rowKey);
+        const prevEnabledRow =
+          enabledIdx !== undefined && enabledIdx > 0
+            ? enabledRows[enabledIdx - 1]
+            : undefined;
+        const betweenKey = prevEnabledRow
+          ? `between::${prevEnabledRow.rowKey}::${row.rowKey}`
+          : '';
+        const isBetweenActive = betweenKey ? Boolean(emptySpaces[betweenKey]) : false;
+        const betweenHeight = betweenKey ? (emptySpaces[betweenKey]?.heightInRows ?? 1) : 1;
+
+        const badgeLabel = getRowBadgeLabel(row, tableData, tempUnit, pressUnit);
+        const secondarySummary = getRowSecondarySummary(row, orderedActiveColumns);
+
+        return (
+          <div key={row.rowKey} className="flex flex-col gap-1">
+            {betweenKey && (
+              isBetweenActive ? (
+                <ActiveSpaceItem
+                  label="Blank Space"
+                  height={betweenHeight}
+                  onAdjust={(delta) => onAdjustSpaceHeight(betweenKey, delta)}
+                  onRemove={() => onRemoveSpace(betweenKey)}
+                />
+              ) : (
+                <div className="relative py-0.5 flex items-center justify-center group">
+                  <div className="absolute inset-x-2 h-px border-t border-dashed border-gray-200 dark:border-gray-700 group-hover:border-amber-400 transition-colors" />
+                  <button
+                    type="button"
+                    onClick={() => onAddSpace(betweenKey)}
+                    className="relative z-10 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-medium bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 border border-gray-300 dark:border-gray-700 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 shadow-2xs transition-all cursor-pointer"
+                  >
+                    <Plus className="w-2.5 h-2.5 text-amber-600" />
+                    <span>Blank Space</span>
+                  </button>
+                </div>
+              )
+            )}
+
+            <label
+              className={`flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-md border text-xs cursor-pointer select-none transition-colors ${
+                isEnabled
+                  ? 'bg-white dark:bg-gray-800/90 text-gray-800 dark:text-gray-100 border-gray-300 dark:border-gray-700 hover:border-gray-400 dark:hover:border-gray-600 shadow-2xs'
+                  : 'bg-gray-100/70 dark:bg-gray-900/50 text-gray-400 dark:text-gray-500 border-gray-200/80 dark:border-gray-800/80 opacity-65'
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <input
+                  type="checkbox"
+                  checked={isEnabled}
+                  onChange={() => onToggleRow(row.rowKey)}
+                  className="rounded text-[#c13726] focus:ring-[#c13726] h-3.5 w-3.5 accent-[#c13726] cursor-pointer shrink-0"
+                />
+                <span className={`font-semibold shrink-0 ${isEnabled ? '' : 'line-through'}`}>
+                  {badgeLabel}
+                </span>
+                {isEnabled && secondarySummary && (
+                  <span className="text-[11px] text-gray-500 dark:text-gray-400 truncate hidden sm:inline">
+                    — {secondarySummary}
+                  </span>
+                )}
+              </div>
+              <span className="text-[10px] font-mono text-gray-400 dark:text-gray-500 shrink-0">
+                {isEnabled && enabledIdx !== undefined ? `Row ${enabledIdx + 1}` : 'Excluded'}
+              </span>
+            </label>
+          </div>
+        );
+      })}
+
+      {/* Bottom Blank Space Slot */}
+      {afterKey && (
+        isAfterActive ? (
+          <ActiveSpaceItem
+            label="Blank Space (Bottom)"
+            height={afterHeight}
+            onAdjust={(delta) => onAdjustSpaceHeight(afterKey, delta)}
+            onRemove={() => onRemoveSpace(afterKey)}
+          />
+        ) : (
+          <div className="flex justify-center">
+            <button
+              type="button"
+              onClick={() => onAddSpace(afterKey)}
+              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-medium text-gray-500 hover:text-amber-700 dark:text-gray-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-dashed border-gray-300 dark:border-gray-700 hover:border-amber-400 transition-colors cursor-pointer"
+            >
+              <Plus className="w-3 h-3 text-amber-600" />
+              <span>Space at bottom</span>
+            </button>
+          </div>
+        )
+      )}
     </div>
   );
 }
@@ -1168,7 +1337,7 @@ function SnippetModalDialog({
                     <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
                       Included Isobars
                     </span>
-                    <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                    <div className="flex flex-wrap gap-1.5">
                       {tableData.blocks.map((b, bIdx) => {
                         if (disabledBlocks.has(bIdx) && !activeBlockIdxs.has(bIdx)) {
                           return null;
@@ -1203,176 +1372,75 @@ function SnippetModalDialog({
                     </div>
                   </div>
                 )}
-
-                {/* Included Rows Selector */}
-                <div className="flex flex-col gap-1.5 pt-2 border-t border-gray-200 dark:border-gray-700/70">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-[11px] font-bold uppercase tracking-wider text-gray-500 dark:text-gray-400">
-                        Included Rows
-                      </span>
-                      <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500">
-                        ({enabledRowCount} of {totalCandidateRowCount})
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-[11px]">
-                      <button
-                        type="button"
-                        onClick={enableAllRows}
-                        className="text-[#c13726] dark:text-red-400 hover:underline font-medium cursor-pointer"
-                      >
-                        All
-                      </button>
-                      <span className="text-gray-300 dark:text-gray-600">·</span>
-                      <button
-                        type="button"
-                        onClick={disableAllRows}
-                        className="text-gray-500 dark:text-gray-400 hover:underline font-medium cursor-pointer"
-                      >
-                        None
-                      </button>
-                    </div>
-                  </div>
-
-                  {rowGroups.length === 1 && !rowGroups[0].blockTitle ? (
-                    <div className="flex flex-wrap gap-1.5 max-h-36 overflow-y-auto pr-0.5">
-                      {rowGroups[0].rows.map((row) => {
-                        const isEnabled = !disabledRowKeys.has(row.rowKey);
-                        const label = getRowBadgeLabel(row, tableData, tempUnit, pressUnit);
-                        return (
-                          <label
-                            key={row.rowKey}
-                            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer border select-none transition-colors ${
-                              isEnabled
-                                ? 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 shadow-2xs'
-                                : 'bg-gray-100/70 dark:bg-gray-900/60 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-800 opacity-60'
-                            }`}
-                          >
-                            <input
-                              type="checkbox"
-                              checked={isEnabled}
-                              onChange={() => toggleRowEnabled(row.rowKey)}
-                              className="rounded text-[#c13726] focus:ring-[#c13726] h-3.5 w-3.5 accent-[#c13726] cursor-pointer"
-                            />
-                            <span className={isEnabled ? '' : 'line-through'}>{label}</span>
-                          </label>
-                        );
-                      })}
-                    </div>
-                  ) : (
-                    <div className="flex flex-col gap-2 max-h-52 overflow-y-auto pr-0.5">
-                      {rowGroups.map((group, gIdx) => {
-                        return (
-                          <div
-                            key={gIdx}
-                            className="flex flex-col gap-1.5 p-2 bg-white/70 dark:bg-gray-900/50 rounded-md border border-gray-200/60 dark:border-gray-800/60"
-                          >
-                            {group.blockTitle && (
-                              <div className="flex items-center justify-between text-xs font-semibold text-amber-800 dark:text-amber-300">
-                                <span className="truncate">{group.blockTitle}</span>
-                                <div className="flex items-center gap-1 text-[10px] text-gray-500 font-normal">
-                                  <button
-                                    type="button"
-                                    onClick={() => enableGroupRows(group)}
-                                    className="hover:text-amber-700 dark:hover:text-amber-200 underline cursor-pointer"
-                                  >
-                                    All
-                                  </button>
-                                  <span>·</span>
-                                  <button
-                                    type="button"
-                                    onClick={() => disableGroupRows(group)}
-                                    className="hover:text-amber-700 dark:hover:text-amber-200 underline cursor-pointer"
-                                  >
-                                    None
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                            <div className="flex flex-wrap gap-1.5">
-                              {group.rows.map((row) => {
-                                const isEnabled = !disabledRowKeys.has(row.rowKey);
-                                const label = getRowBadgeLabel(row, tableData, tempUnit, pressUnit);
-                                return (
-                                  <label
-                                    key={row.rowKey}
-                                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium cursor-pointer border select-none transition-colors ${
-                                      isEnabled
-                                        ? 'bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-200 border-gray-300 dark:border-gray-600 hover:border-gray-400 dark:hover:border-gray-500 shadow-2xs'
-                                        : 'bg-gray-100/70 dark:bg-gray-900/60 text-gray-400 dark:text-gray-500 border-gray-200 dark:border-gray-800 opacity-60'
-                                    }`}
-                                  >
-                                    <input
-                                      type="checkbox"
-                                      checked={isEnabled}
-                                      onChange={() => toggleRowEnabled(row.rowKey)}
-                                      className="rounded text-[#c13726] focus:ring-[#c13726] h-3.5 w-3.5 accent-[#c13726] cursor-pointer"
-                                    />
-                                    <span className={isEnabled ? '' : 'line-through'}>{label}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
               </div>
 
-              {/* Interpolation Spaces (Blank Rows for handwriting) */}
+              {/* Unified Rows & Interpolation Spaces Section */}
               <div className="flex flex-col gap-2.5 bg-gray-50 dark:bg-gray-800/60 p-3 rounded-lg border border-gray-200/80 dark:border-gray-800">
-                <div className="flex items-center justify-between gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <div
-                    className="flex items-center gap-2 cursor-pointer select-none"
+                    className="flex items-center gap-1.5 cursor-pointer select-none"
                     onClick={() => setIsInterpolationOpen((prev) => !prev)}
                   >
-                    <PenLine className="w-4 h-4 text-[#c13726] dark:text-red-400" />
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-gray-700 dark:text-gray-300">
-                      Interpolation Spaces
+                    <PenLine className="w-3.5 h-3.5 text-[#c13726] dark:text-red-400 shrink-0" />
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-gray-600 dark:text-gray-300">
+                      Rows &amp; Spaces
                     </span>
-                    {activeSpaceCount > 0 ? (
+                    <span className="text-[11px] font-medium text-gray-400 dark:text-gray-500">
+                      ({enabledRowCount} of {totalCandidateRowCount})
+                    </span>
+                    {activeSpaceCount > 0 && (
                       <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-[#c13726] text-white">
-                        {activeSpaceCount} active
-                      </span>
-                    ) : (
-                      <span className="text-[11px] text-gray-400 dark:text-gray-500 hidden sm:inline">
-                        (Blank rows for handwriting)
+                        {activeSpaceCount} space{activeSpaceCount > 1 ? 's' : ''}
                       </span>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 text-[11px] ml-auto">
                     {canAddBetweenAll && (
-                      <button
-                        type="button"
-                        onClick={handleAddBetweenAll}
-                        className="inline-flex items-center gap-1 text-[11px] text-[#c13726] dark:text-red-400 hover:underline font-semibold cursor-pointer"
-                        title="Add 1-row blank space between each adjacent row"
-                      >
-                        <Plus className="w-3 h-3" />
-                        <span>Space Between All</span>
-                      </button>
+                      <>
+                        <button
+                          type="button"
+                          onClick={handleAddBetweenAll}
+                          className="inline-flex items-center gap-0.5 text-[#c13726] dark:text-red-400 hover:underline font-semibold cursor-pointer"
+                          title="Add 1-row blank space between each adjacent enabled row"
+                        >
+                          <Plus className="w-3 h-3" />
+                          <span>Space Between All</span>
+                        </button>
+                        <span className="text-gray-300 dark:text-gray-600">·</span>
+                      </>
                     )}
                     {activeSpaceCount > 0 && (
                       <>
-                        {canAddBetweenAll && (
-                          <span className="text-gray-300 dark:text-gray-600">·</span>
-                        )}
                         <button
                           type="button"
                           onClick={() => setEmptySpaces({})}
-                          className="text-[11px] text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:underline font-medium cursor-pointer"
+                          className="text-gray-500 dark:text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:underline font-medium cursor-pointer"
                         >
                           Clear Spaces
                         </button>
+                        <span className="text-gray-300 dark:text-gray-600">·</span>
                       </>
                     )}
                     <button
                       type="button"
+                      onClick={enableAllRows}
+                      className="text-[#c13726] dark:text-red-400 hover:underline font-medium cursor-pointer"
+                    >
+                      All
+                    </button>
+                    <span className="text-gray-300 dark:text-gray-600">·</span>
+                    <button
+                      type="button"
+                      onClick={disableAllRows}
+                      className="text-gray-500 dark:text-gray-400 hover:underline font-medium cursor-pointer"
+                    >
+                      None
+                    </button>
+                    <button
+                      type="button"
                       onClick={() => setIsInterpolationOpen((prev) => !prev)}
-                      className="p-1 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors cursor-pointer"
+                      className="p-0.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded transition-colors cursor-pointer"
                       title={isInterpolationOpen ? 'Collapse' : 'Expand'}
                     >
                       {isInterpolationOpen ? (
@@ -1385,130 +1453,83 @@ function SnippetModalDialog({
                 </div>
 
                 {isInterpolationOpen && (
-                  <div className="flex flex-col gap-2 pt-1 border-t border-gray-200 dark:border-gray-700/70">
-                    <p className="text-[11px] text-gray-500 dark:text-gray-400">
-                      Add empty vertical space between or before/after rows to draw in interpolated values:
-                    </p>
-
-                    <div className="max-h-60 overflow-y-auto flex flex-col gap-2 p-2 bg-white dark:bg-gray-900 rounded-md border border-gray-200 dark:border-gray-800">
-                      {enabledRowGroups.length === 0 ? (
-                        <div className="py-6 px-4 text-center text-xs text-gray-500 dark:text-gray-400">
-                          All rows are currently disabled. Check at least one row under &quot;Included Rows&quot; above to configure interpolation spaces.
-                        </div>
-                      ) : (
-                        enabledRowGroups.map((group, gIdx) => {
-                          const rawRows = group.rows;
-                          if (rawRows.length === 0) return null;
-
-                          const beforeKey = `before::${rawRows[0].rowKey}`;
-                          const isBeforeActive = Boolean(emptySpaces[beforeKey]);
-                          const beforeHeight = emptySpaces[beforeKey]?.heightInRows ?? 1;
-
-                          const afterKey = `after::${rawRows[rawRows.length - 1].rowKey}`;
-                          const isAfterActive = Boolean(emptySpaces[afterKey]);
-                          const afterHeight = emptySpaces[afterKey]?.heightInRows ?? 1;
-
+                  <div className="flex flex-col gap-2 pt-1.5 border-t border-gray-200 dark:border-gray-700/70">
+                    {rowGroups.length === 1 && !rowGroups[0].blockTitle ? (
+                      <div className="p-2 bg-white/80 dark:bg-gray-900/60 rounded-md border border-gray-200/70 dark:border-gray-800/70">
+                        <UnifiedGroupRows
+                          group={rowGroups[0]}
+                          tableData={tableData}
+                          tempUnit={tempUnit}
+                          pressUnit={pressUnit}
+                          orderedActiveColumns={orderedActiveColumns}
+                          disabledRowKeys={disabledRowKeys}
+                          emptySpaces={emptySpaces}
+                          onToggleRow={toggleRowEnabled}
+                          onAddSpace={addSpace}
+                          onRemoveSpace={removeSpace}
+                          onAdjustSpaceHeight={adjustHeight}
+                        />
+                      </div>
+                    ) : (
+                      <div className="flex flex-col gap-2.5">
+                        {rowGroups.map((group, gIdx) => {
+                          const groupEnabledCount = group.rows.filter(
+                            (r) => !disabledRowKeys.has(r.rowKey)
+                          ).length;
                           return (
-                            <div key={gIdx} className="flex flex-col gap-1.5">
+                            <div
+                              key={gIdx}
+                              className="flex flex-col gap-1.5 p-2.5 bg-white/80 dark:bg-gray-900/60 rounded-md border border-gray-200/70 dark:border-gray-800/70"
+                            >
                               {group.blockTitle && (
-                                <div className="px-2 py-1 text-xs font-bold text-amber-800 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/40 rounded border border-amber-200/60 dark:border-amber-800/60">
-                                  {group.blockTitle}
-                                </div>
-                              )}
-
-                              {/* Slot Before First Row */}
-                              {isBeforeActive ? (
-                                <ActiveSpaceItem
-                                  label="Blank Space (Top / Before first row)"
-                                  height={beforeHeight}
-                                  onAdjust={(delta) => adjustHeight(beforeKey, delta)}
-                                  onRemove={() => removeSpace(beforeKey)}
-                                />
-                              ) : (
-                                <div className="flex justify-center py-0.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => addSpace(beforeKey)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-medium text-gray-500 hover:text-amber-700 dark:text-gray-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-dashed border-gray-300 dark:border-gray-700 hover:border-amber-400 transition-colors cursor-pointer"
-                                  >
-                                    <Plus className="w-3 h-3 text-amber-600" />
-                                    <span>Space Before First Row</span>
-                                  </button>
-                                </div>
-                              )}
-
-                              {/* Rows and Between Slots */}
-                              {rawRows.map((row, rIdx) => {
-                                const betweenKey =
-                                  rIdx < rawRows.length - 1
-                                    ? `between::${row.rowKey}::${rawRows[rIdx + 1].rowKey}`
-                                    : '';
-                                const isBetweenActive = betweenKey ? Boolean(emptySpaces[betweenKey]) : false;
-                                const betweenHeight = betweenKey ? (emptySpaces[betweenKey]?.heightInRows ?? 1) : 1;
-                                const rowLabel = getRowShortLabel(row, orderedActiveColumns);
-
-                                return (
-                                  <div key={row.rowKey} className="flex flex-col gap-1.5">
-                                    {/* Row Item Display */}
-                                    <div className="flex items-center justify-between px-2.5 py-1.5 bg-gray-50 dark:bg-gray-800/80 rounded border border-gray-200/70 dark:border-gray-700/60 text-xs font-medium text-gray-800 dark:text-gray-200">
-                                      <span className="truncate">{rowLabel}</span>
-                                      <span className="text-[10px] text-gray-400 dark:text-gray-500 font-mono ml-2 shrink-0">
-                                        Row {rIdx + 1}
+                                <div className="flex items-center justify-between gap-2 pb-1 border-b border-gray-100 dark:border-gray-800">
+                                  <div className="flex items-center gap-1.5 min-w-0">
+                                    <span className="text-xs font-bold text-amber-800 dark:text-amber-300 truncate">
+                                      {group.blockTitle}
+                                    </span>
+                                    {groupEnabledCount === 0 && (
+                                      <span className="text-[10px] font-normal text-gray-400 dark:text-gray-500 shrink-0">
+                                        (excluded)
                                       </span>
-                                    </div>
-
-                                    {/* Between Slot (if not last row) */}
-                                    {rIdx < rawRows.length - 1 && (
-                                      isBetweenActive ? (
-                                        <ActiveSpaceItem
-                                          label="Blank Space (Interpolation Gap)"
-                                          height={betweenHeight}
-                                          onAdjust={(delta) => adjustHeight(betweenKey, delta)}
-                                          onRemove={() => removeSpace(betweenKey)}
-                                        />
-                                      ) : (
-                                        <div className="relative py-1 flex items-center justify-center group">
-                                          <div className="absolute inset-x-0 h-px border-t border-dashed border-gray-200 dark:border-gray-700 group-hover:border-amber-400 transition-colors" />
-                                          <button
-                                            type="button"
-                                            onClick={() => addSpace(betweenKey)}
-                                            className="relative z-10 inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[11px] font-medium bg-white dark:bg-gray-900 text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-700 hover:border-amber-500 hover:text-amber-700 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/50 shadow-2xs transition-all cursor-pointer"
-                                          >
-                                            <Plus className="w-3 h-3 text-amber-600" />
-                                            <span>Add Blank Space</span>
-                                          </button>
-                                        </div>
-                                      )
                                     )}
                                   </div>
-                                );
-                              })}
-
-                              {/* Slot After Last Row */}
-                              {isAfterActive ? (
-                                <ActiveSpaceItem
-                                  label="Blank Space (Bottom / After last row)"
-                                  height={afterHeight}
-                                  onAdjust={(delta) => adjustHeight(afterKey, delta)}
-                                  onRemove={() => removeSpace(afterKey)}
-                                />
-                              ) : (
-                                <div className="flex justify-center py-0.5">
-                                  <button
-                                    type="button"
-                                    onClick={() => addSpace(afterKey)}
-                                    className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-[11px] font-medium text-gray-500 hover:text-amber-700 dark:text-gray-400 dark:hover:text-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950/40 border border-dashed border-gray-300 dark:border-gray-700 hover:border-amber-400 transition-colors cursor-pointer"
-                                  >
-                                    <Plus className="w-3 h-3 text-amber-600" />
-                                    <span>Space After Last Row</span>
-                                  </button>
+                                  <div className="flex items-center gap-1 text-[10px] text-gray-500 font-normal shrink-0">
+                                    <button
+                                      type="button"
+                                      onClick={() => enableGroupRows(group)}
+                                      className="hover:text-amber-700 dark:hover:text-amber-200 underline cursor-pointer"
+                                    >
+                                      All
+                                    </button>
+                                    <span>·</span>
+                                    <button
+                                      type="button"
+                                      onClick={() => disableGroupRows(group)}
+                                      className="hover:text-amber-700 dark:hover:text-amber-200 underline cursor-pointer"
+                                    >
+                                      None
+                                    </button>
+                                  </div>
                                 </div>
                               )}
+                              <UnifiedGroupRows
+                                group={group}
+                                tableData={tableData}
+                                tempUnit={tempUnit}
+                                pressUnit={pressUnit}
+                                orderedActiveColumns={orderedActiveColumns}
+                                disabledRowKeys={disabledRowKeys}
+                                emptySpaces={emptySpaces}
+                                onToggleRow={toggleRowEnabled}
+                                onAddSpace={addSpace}
+                                onRemoveSpace={removeSpace}
+                                onAdjustSpaceHeight={adjustHeight}
+                              />
                             </div>
                           );
-                        })
-                      )}
-                    </div>
+                        })}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>
@@ -1549,7 +1570,7 @@ function SnippetModalDialog({
                         All highlighted rows are disabled
                       </p>
                       <p className="text-xs text-gray-500 dark:text-gray-400 max-w-sm">
-                        Check at least one row under &quot;Included Rows&quot; above (or click &quot;All&quot;) to include it in your snippet.
+                        Check at least one row under &quot;Rows &amp; Spaces&quot; above (or click &quot;All&quot;) to include it in your snippet.
                       </p>
                     </div>
                   ) : isSnippetActive && renderResult && previewUrl ? (
