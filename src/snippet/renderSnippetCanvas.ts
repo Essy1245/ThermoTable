@@ -36,6 +36,8 @@ export interface SnippetRenderConfig {
   tableName: string;
   /** e.g. "Ideal-gas properties of air" */
   tableTitle: string;
+  /** Short context required to interpret the values in this table. */
+  note?: string;
   /** Columns to render in order */
   columns: SnippetColumnDef[];
   /** One or more groups of rows (single group for saturated/ideal gas, 1+ isobar groups for superheated/compressed) */
@@ -227,7 +229,9 @@ export async function renderSnippetCanvas(
 
   mCtx.font = `400 16.5px ${TEXTBOOK_SERIF}`;
   const titleTextW = mCtx.measureText(formattedTitle).width;
-  const minBannerWidth = badgeBoxW + 14 + Math.ceil(titleTextW) + 16;
+  mCtx.font = `400 13px ${TEXTBOOK_SERIF}`;
+  const noteWidth = config.note ? Math.ceil(mCtx.measureText(config.note).width) + 16 : 0;
+  const minBannerWidth = Math.max(badgeBoxW + 14 + Math.ceil(titleTextW) + 16, noteWidth);
 
   // Measure individual columns width needed
   const colCellPaddingX = 14;
@@ -286,6 +290,7 @@ export async function renderSnippetCanvas(
 
   // Vertical layout metrics (0 outer padding for tight snippet crop)
   const bannerH = 36;
+  const noteH = config.note ? 22 : 0;
   const gapBannerToContent = 4;
   const headerRowH = 34;
   const blockSubheaderH = 26;
@@ -353,7 +358,7 @@ export async function renderSnippetCanvas(
     }
 
     const maxTrackH = Math.max(...partitionHeights);
-    const estTotalH = bannerH + gapBannerToContent + maxTrackH + outerPadBottom;
+    const estTotalH = bannerH + noteH + gapBannerToContent + maxTrackH + outerPadBottom;
     const estColsW = c * minBlockWidth + (c - 1) * columnGapX;
     const estTotalW = Math.max(estColsW, minBannerWidth);
 
@@ -405,7 +410,7 @@ export async function renderSnippetCanvas(
   }
 
   const maxContentH = Math.max(...trackHeights);
-  const logicalHeight = Math.ceil(bannerH + gapBannerToContent + maxContentH + outerPadBottom);
+  const logicalHeight = Math.ceil(bannerH + noteH + gapBannerToContent + maxContentH + outerPadBottom);
 
   // Setup Canvas
   const canvas = document.createElement('canvas');
@@ -447,7 +452,15 @@ export async function renderSnippetCanvas(
   ctx.lineTo(logicalWidth, bannerH);
   ctx.stroke();
 
-  const contentStartY = bannerH + gapBannerToContent;
+  if (config.note) {
+    ctx.fillStyle = PALETTE.headerText;
+    ctx.font = `400 13px ${TEXTBOOK_SERIF}`;
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(config.note, 8, bannerH + noteH / 2);
+  }
+
+  const contentStartY = bannerH + noteH + gapBannerToContent;
   const hitboxes: SnippetCellHitbox[] = [];
 
   // 3. Render Column Tracks side-by-side

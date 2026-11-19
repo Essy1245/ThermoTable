@@ -16,6 +16,7 @@ import {
   ChevronUp,
 } from 'lucide-react';
 import type { TableMeta } from '../data/tablesMeta';
+import { formatPressure } from '../data/pressureUnits';
 import type {
   ThermoTableData,
   ThermoValue,
@@ -230,7 +231,7 @@ function buildAllColumns(
       { id: 'u', symbol: 'u', unit: 'kJ/kg', label: 'u' },
       { id: 'h', symbol: 'h', unit: 'kJ/kg', label: 'h' },
       { id: 's', symbol: 's', unit: 'kJ/kg · K', label: 's' },
-    ];
+    ].filter(col => col.id === 'T' || visibleCols[`property_${col.id}`] !== false);
   }
 
   if (tableData.type === 'ideal_gas_air') {
@@ -240,7 +241,7 @@ function buildAllColumns(
       { id: 'u', symbol: 'u', unit: 'kJ/kg', label: 'u' },
       { id: 's_deg', symbol: 's', superscript: '°', unit: 'kJ/kg · K', label: 's°' },
       { id: 's_plus', symbol: 's', superscript: '+', unit: 'kJ/kg · K', label: 's+' },
-    ];
+    ].filter(col => col.id === 'T' || visibleCols[`property_${col.id}`] !== false);
   }
 
   if (tableData.type === 'ideal_gas_molar') {
@@ -256,7 +257,7 @@ function buildAllColumns(
         unit: 'kJ/kmol · K',
         label: 's̄°',
       },
-    ];
+    ].filter(col => col.id === 'T' || visibleCols[`property_${col.id}`] !== false);
   }
 
   return [];
@@ -1035,46 +1036,17 @@ function SnippetModalDialog({
   );
 
   const formatPressDisplay = useCallback(
-    (val?: ThermoValue) => {
-      if (!val) return '-';
-      if (pressUnit === 'MPa') {
-        return (val.v / 1000).toFixed(4);
-      }
-      if (pressUnit === 'bar') {
-        return (val.v / 100).toFixed(4);
-      }
-      return val.s;
-    },
+    (val?: ThermoValue) => formatPressure(val, 'kPa', pressUnit),
     [pressUnit]
   );
 
   const formatPressFromMPaDisplay = useCallback(
-    (val?: ThermoValue) => {
-      if (!val) return '-';
-      if (pressUnit === 'kPa') {
-        return Number((val.v * 1000).toFixed(2)).toString();
-      }
-      if (pressUnit === 'bar') {
-        const decimals = val.s.includes('.')
-          ? Math.max(1, (val.s.split('.')[1]?.length || 2) - 1)
-          : 1;
-        return (val.v * 10).toFixed(decimals);
-      }
-      return val.s;
-    },
+    (val?: ThermoValue) => formatPressure(val, 'MPa', pressUnit),
     [pressUnit]
   );
 
   const formatIsobarPress = useCallback(
-    (val: ThermoValue) => {
-      if (pressUnit === 'kPa') {
-        return `${(val.v * 1000).toFixed(val.v * 1000 >= 10 ? 0 : 1)} kPa`;
-      }
-      if (pressUnit === 'bar') {
-        return `${(val.v * 10).toFixed(val.v * 10 >= 10 ? 0 : 2)} bar`;
-      }
-      return `${val.s} MPa`;
-    },
+    (val: ThermoValue) => `${formatPressure(val, 'MPa', pressUnit)} ${pressUnit}`,
     [pressUnit]
   );
 
@@ -1400,9 +1372,27 @@ function SnippetModalDialog({
     }
 
     let cancelled = false;
+    const hasColumn = (id: string) => orderedActiveColumns.some(column => column.id === id);
+    let note: string | undefined;
+    if (tableData?.type === 'specific_heat_poly') {
+      note = 'c̄p = a + bT + cT² + dT³; T in K; c̄p in kJ/(kmol·K).';
+    } else if (tableData?.type === 'solids' && hasColumn('T')) {
+      note = 'Values are at room temperature unless a temperature is specified.';
+    } else if (tableData?.type === 'foods' && hasColumn('T_freeze')) {
+      note = 'Freezing point: onset for fruits and vegetables; average for other foods.';
+    } else if (tableData?.type === 'liquids' && hasColumn('T_boil') &&
+      finalRowGroups.some(group => group.rows.some(row => row.cells.T_boil?.includes('*')))) {
+      note = '* CO₂ sublimation temperature; triple-point pressure is 518 kPa.';
+    } else if ((tableData?.type === 'superheated' || tableData?.type === 'compressed') && hasColumn('T') &&
+      finalRowGroups.some(group => group.rows.some(row => row.cells.T === 'Sat.'))) {
+      note = tableData.type === 'compressed'
+        ? 'Sat. denotes saturated liquid at the specified pressure.'
+        : 'Sat. denotes saturated vapor at the specified pressure.';
+    }
     renderSnippetCanvas({
       tableName: tableMeta.name,
       tableTitle: tableMeta.title,
+      note,
       columns: orderedActiveColumns,
       groups: finalRowGroups,
       emphasizedCells,
@@ -1425,7 +1415,7 @@ function SnippetModalDialog({
     return () => {
       cancelled = true;
     };
-  }, [isSnippetActive, tableMeta, orderedActiveColumns, finalRowGroups, emphasizedCells]);
+  }, [isSnippetActive, tableMeta, tableData, orderedActiveColumns, finalRowGroups, emphasizedCells]);
 
   const handleDownloadImage = useCallback(() => {
     if (!previewUrl) return;

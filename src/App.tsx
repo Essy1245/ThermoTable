@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import ReactDOM from 'react-dom';
 import { SUPPORTED_TABLES } from './data/tablesMeta';
 import { getTableData } from './data/tables';
+import { formatPressure } from './data/pressureUnits';
 import type { 
   IdealGasAirRow, 
   IdealGasMolarRow, 
@@ -13,6 +14,7 @@ import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X,
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { SnippetModal } from './snippet/SnippetModal';
+import { getJumpOptions, findNearestRow } from './jump';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -104,6 +106,44 @@ const A2B_GAS_GROUPS = [
   { id: 'n2', label: 'Nitrogen, N₂', short: 'N₂' },
   { id: 'o2', label: 'Oxygen, O₂', short: 'O₂' },
 ] as const;
+
+const ISOBAR_PROPERTY_COLUMNS = [
+  { id: 'v', label: 'v' },
+  { id: 'u', label: 'u' },
+  { id: 'h', label: 'h' },
+  { id: 's', label: 's' },
+];
+
+const IDEAL_AIR_PROPERTY_COLUMNS = [
+  { id: 'h', label: 'h' },
+  { id: 'u', label: 'u' },
+  { id: 's_deg', label: 's°' },
+  { id: 's_plus', label: 's⁺' },
+];
+
+const IDEAL_MOLAR_PROPERTY_COLUMNS = [
+  { id: 'h_bar', label: 'h̄' },
+  { id: 'u_bar', label: 'ū' },
+  { id: 's_bar_deg', label: 's̄°' },
+];
+
+const TABLE_NOTES: Record<string, string> = {
+  'A-1': 'R = Rᵤ/M, where Rᵤ = 8.31447 kJ/(kmol·K). The units kJ/(kg·K) and kPa·m³/(kg·K) are equivalent. Sources: Kobe and Lynn (1953); ASHRAE Handbook of Fundamentals (1993).',
+  'A-2a': 'The units kJ/(kg·K) and kJ/(kg·°C) are equivalent for specific heat. Source: B. G. Kyle, Chemical and Process Thermodynamics, 3rd ed. (2000).',
+  'A-2b': 'Source: Kenneth Wark, Thermodynamics, 4th ed. (1983), table A–4M; originally published in Tables of Thermal Properties of Gases, NBS Circular 564 (1955).',
+  'A-2c': 'Use c̄p = a + bT + cT² + dT³ with T in K and c̄p in kJ/(kmol·K), even when the displayed temperature range is converted to °C. Source: B. G. Kyle, Chemical and Process Thermodynamics (1984).',
+  'A-3b': 'Values are for room temperature unless a temperature is indicated. A dash in the temperature column means the source does not specify a temperature.',
+  'A-4': 'Water properties were generated using Engineering Equation Solver (EES), using the IAPWS 1995 formulation for ordinary water.',
+  'A-5': 'Water properties were generated using Engineering Equation Solver (EES), using the IAPWS 1995 formulation for ordinary water.',
+  'A-6': 'The temperature shown beside each pressure is its saturation temperature. Sat. denotes saturated vapor at that pressure. Source: EES Steam_IAPWS, based on the IAPWS 1995 water formulation.',
+  'A-7': 'The temperature shown beside each pressure is its saturation temperature. Sat. denotes saturated liquid at that pressure. Source: EES Steam_IAPWS, based on the IAPWS 1995 water formulation.',
+  'A-11': 'R-134a properties were generated using EES and the Tillner-Roth and Baehr equation of state (1994). Saturated-liquid enthalpy and entropy are zero at −40 °C.',
+  'A-12': 'R-134a properties were generated using EES and the Tillner-Roth and Baehr equation of state (1994). Saturated-liquid enthalpy and entropy are zero at −40 °C.',
+  'A-13': 'The temperature shown beside each pressure is its saturation temperature. Sat. denotes saturated vapor at that pressure. R-134a properties use EES and the Tillner-Roth and Baehr equation of state (1994); saturated-liquid enthalpy and entropy are zero at −40 °C.',
+  'A-17': 'The entropy functions are s°(T) = ∫₀ᵀ [cp(T)/T] dT and s⁺(T) = s°(T) − R ln T. Source: Kenneth Wark, Thermodynamics, 4th ed. (1983); originally published in Keenan and Kaye, Gas Tables (1948).',
+  'A-18': 'Source: Kenneth Wark, Thermodynamics, 4th ed. (1983), adapted from JANAF Thermochemical Tables, NSRDS-NBS-37 (1971).',
+  'A-19': 'Source: Kenneth Wark, Thermodynamics, 4th ed. (1983), adapted from JANAF Thermochemical Tables, NSRDS-NBS-37 (1971).',
+};
 
 const SubHeader = React.memo(function SubHeader({
   label,
@@ -281,6 +321,26 @@ export default function App() {
     gas_o2: true,
   });
 
+  // Keep property visibility independent for each table. Missing entries are visible.
+  const [tablePropertyVisibility, setTablePropertyVisibility] = useState<Record<string, Record<string, boolean>>>({});
+  const currentPropertyVisibility = tablePropertyVisibility[currentTableId];
+  const snippetVisibleCols = useMemo(() => ({
+    ...visibleCols,
+    ...currentPropertyVisibility,
+  }), [visibleCols, currentPropertyVisibility]);
+
+  const isPropertyVisible = (id: string) => currentPropertyVisibility?.[`property_${id}`] !== false;
+  const togglePropertyVisibility = (id: string) => {
+    const key = `property_${id}`;
+    setTablePropertyVisibility(previous => ({
+      ...previous,
+      [currentTableId]: {
+        ...previous[currentTableId],
+        [key]: previous[currentTableId]?.[key] === false,
+      },
+    }));
+  };
+
   const [tablePinnedRows, setTablePinnedRows] = useState<Record<string, Set<string>>>({});
   const [tableSelectedCols, setTableSelectedCols] = useState<Record<string, Set<string>>>({});
   const selectedCols = useMemo(() => tableSelectedCols[currentTableId] || new Set<string>(), [tableSelectedCols, currentTableId]);
@@ -434,6 +494,10 @@ export default function App() {
   const [menuSelectedIndex, setMenuSelectedIndex] = useState<number>(0);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
+  useEffect(() => {
+    tableRef.current?.scrollTo({ top: 0, left: 0 });
+  }, [currentTableId]);
+
   const switchTable = (id: string) => {
     clearAllHover();
     setCurrentTableId(id);
@@ -578,38 +642,15 @@ export default function App() {
   };
 
   const formatPressDisplay = (val?: ThermoValue) => {
-    if (!val) return '-';
-    if (pressUnit === 'MPa') {
-      return (val.v / 1000).toFixed(4);
-    }
-    if (pressUnit === 'bar') {
-      return (val.v / 100).toFixed(4);
-    }
-    return val.s;
+    return formatPressure(val, 'kPa', pressUnit);
   };
 
   const formatPressFromMPaDisplay = (val?: ThermoValue) => {
-    if (!val) return '-';
-    if (pressUnit === 'kPa') {
-      return Number((val.v * 1000).toFixed(2)).toString();
-    }
-    if (pressUnit === 'bar') {
-      const decimals = val.s.includes('.')
-        ? Math.max(1, (val.s.split('.')[1]?.length || 2) - 1)
-        : 1;
-      return (val.v * 10).toFixed(decimals);
-    }
-    return val.s;
+    return formatPressure(val, 'MPa', pressUnit);
   };
 
   const formatIsobarPress = (val: ThermoValue) => {
-    if (pressUnit === 'kPa') {
-      return `${(val.v * 1000).toFixed(val.v * 1000 >= 10 ? 0 : 1)} kPa`;
-    }
-    if (pressUnit === 'bar') {
-      return `${(val.v * 10).toFixed(val.v * 10 >= 10 ? 0 : 2)} bar`;
-    }
-    return `${val.s} MPa`;
+    return `${formatPressure(val, 'MPa', pressUnit)} ${pressUnit}`;
   };
 
   const formatLiquidBoilTemp = (row: LiquidPropertiesRow) => {
@@ -640,250 +681,119 @@ export default function App() {
       .replace(/[₀₁₂₃₄₅₆₇₈₉]/g, (ch) => String('₀₁₂₃₄₅₆₇₈₉'.indexOf(ch)))
       .replace(/[\s\-_(),]/g, '');
 
+  const jumpOptions = useMemo(
+    () => tableData ? getJumpOptions(tableData, tempUnit, pressUnit) : [],
+    [tableData, tempUnit, pressUnit]
+  );
+
   const handleJump = () => {
     const rawQuery = jumpValue.trim();
     if (!rawQuery || !tableData) return;
 
-    const val1 = parseFloat(rawQuery);
-    const isNumeric = !isNaN(val1);
-
+    const number = Number(rawQuery.replace('−', '-'));
+    const isNumeric = Number.isFinite(number);
     setJumpValue('');
     jumpInputRef.current?.blur();
 
-    let targetKey: string | null = null;
-
-    if (tableData.type === 'saturated') {
+    if (tableData.type === 'superheated' || tableData.type === 'compressed') {
       if (!isNumeric) return;
-      let minDiff = Infinity;
-      let targetIndex = -1;
-      const targetVal = jumpProperty === 'P'
-        ? (pressUnit === 'MPa' ? val1 * 1000 : pressUnit === 'bar' ? val1 * 100 : val1)
-        : (tempUnit === 'K' ? val1 - 273.15 : val1);
-
-      tableData.rows.forEach((row, idx) => {
-        let rowVal = row.T?.v;
-        if (jumpProperty === 'P' && row.P) rowVal = row.P.v;
-        if (rowVal !== undefined) {
-          const diff = Math.abs(rowVal - targetVal);
-          if (diff < minDiff) {
-            minDiff = diff;
-            targetIndex = idx;
-          }
+      const targetPressure = jumpSuperheatedUnit === 'kPa'
+        ? number / 1000
+        : jumpSuperheatedUnit === 'bar' ? number / 10 : number;
+      let nearest = -1;
+      let bestDifference = Infinity;
+      tableData.blocks.forEach((block, index) => {
+        const difference = Math.abs(block.P.v - targetPressure);
+        if (difference < bestDifference) {
+          bestDifference = difference;
+          nearest = index;
         }
       });
-      if (targetIndex !== -1) targetKey = targetIndex.toString();
-    } else if (tableData.type === 'superheated' || tableData.type === 'compressed') {
-      if (!isNumeric) return;
-      let targetP_MPa = val1;
-      if (jumpSuperheatedUnit === 'kPa') targetP_MPa = val1 / 1000;
-      else if (jumpSuperheatedUnit === 'bar') targetP_MPa = val1 / 10;
+      if (nearest === -1) return;
 
-      let minPDiff = Infinity;
-      let targetBlockIdx = -1;
-      tableData.blocks.forEach((block, bIdx) => {
-        const diff = Math.abs(block.P.v - targetP_MPa);
-        if (diff < minPDiff) {
-          minPDiff = diff;
-          targetBlockIdx = bIdx;
-        }
-      });
-
-      if (targetBlockIdx !== -1) {
-        if (disabledBlocks.has(targetBlockIdx)) {
-          setDisabledBlocks(prev => {
-            const next = new Set(prev);
-            next.delete(targetBlockIdx);
-            return next;
-          });
-        }
-        if (collapsedBlocks.has(targetBlockIdx)) {
-          setCollapsedBlocks(prev => {
-            const next = new Set(prev);
-            next.delete(targetBlockIdx);
-            return next;
-          });
-        }
-
-        const cardEl = blockRefs.current[targetBlockIdx];
-        if (cardEl) {
-          cardEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
-        }
-        setHighlightedBlockIdx(targetBlockIdx);
-        setTimeout(() => setHighlightedBlockIdx(null), 2500);
-      }
-      return;
-    } else if (
-      tableData.type === 'ideal_gas_air' ||
-      tableData.type === 'ideal_gas_molar' ||
-      tableData.type === 'specific_heat_temp'
-    ) {
-      if (!isNumeric) return;
-      const targetTempK = tempUnit === 'C' ? val1 + 273.15 : val1;
-      let minDiff = Infinity;
-      let targetIndex = -1;
-      tableData.rows.forEach((row, idx) => {
-        const rowVal = row.T.v;
-        const diff = Math.abs(rowVal - targetTempK);
-        if (diff < minDiff) {
-          minDiff = diff;
-          targetIndex = idx;
-        }
-      });
-      if (targetIndex !== -1) targetKey = targetIndex.toString();
-    } else if (
-      tableData.type === 'critical_properties' ||
-      tableData.type === 'specific_heat_300k' ||
-      tableData.type === 'specific_heat_poly' ||
-      tableData.type === 'liquids' ||
-      tableData.type === 'solids' ||
-      tableData.type === 'foods'
-    ) {
-      const findBySubstance = () => {
-        const qNorm = normalizeChemText(rawQuery);
-        let idx = tableData.rows.findIndex((r) => {
-          const subNorm = normalizeChemText(r.substance);
-          const formNorm = 'formula' in r ? normalizeChemText(r.formula) : '';
-          return subNorm === qNorm || (formNorm && formNorm === qNorm);
+      if (disabledBlocks.has(nearest)) {
+        setDisabledBlocks(previous => {
+          const next = new Set(previous);
+          next.delete(nearest);
+          return next;
         });
-        if (idx === -1) {
-          idx = tableData.rows.findIndex((r) => {
-            const subNorm = normalizeChemText(r.substance);
-            const formNorm = 'formula' in r ? normalizeChemText(r.formula) : '';
-            return subNorm.startsWith(qNorm) || (formNorm && formNorm.startsWith(qNorm));
-          });
-        }
-        if (idx === -1) {
-          idx = tableData.rows.findIndex((r) => {
-            const subNorm = normalizeChemText(r.substance);
-            const formNorm = 'formula' in r ? normalizeChemText(r.formula) : '';
-            return subNorm.includes(qNorm) || (formNorm && formNorm.includes(qNorm));
-          });
-        }
-        return idx;
-      };
+      }
+      if (collapsedBlocks.has(nearest)) {
+        setCollapsedBlocks(previous => {
+          const next = new Set(previous);
+          next.delete(nearest);
+          return next;
+        });
+      }
+      // A disabled block has no DOM node until the state update has rendered it.
+      requestAnimationFrame(() => {
+        blockRefs.current[nearest]?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      });
+      setHighlightedBlockIdx(nearest);
+      setTimeout(() => setHighlightedBlockIdx(null), 2500);
+      return;
+    }
 
-      if (jumpProperty === 'substance' || !isNumeric) {
-        const foundIdx = findBySubstance();
-        if (foundIdx !== -1) {
-          targetKey = foundIdx.toString();
-        }
+    if (!('rows' in tableData)) return;
+    let option = jumpOptions.find(item => item.id === jumpProperty);
+    let targetIndex = -1;
+
+    if (jumpProperty === 'substance' && 'substance' in (tableData.rows[0] || {})) {
+      const query = normalizeChemText(rawQuery);
+      const normalizedRows = tableData.rows.map(row => {
+        if (!('substance' in row)) return [];
+        return [normalizeChemText(row.substance), 'formula' in row ? normalizeChemText(row.formula) : ''];
+      });
+      if (query) {
+        targetIndex = normalizedRows.findIndex(values => values.some(value => value && value === query));
+        if (targetIndex === -1) targetIndex = normalizedRows.findIndex(values => values.some(value => value && value.startsWith(query)));
+        if (targetIndex === -1) targetIndex = normalizedRows.findIndex(values => values.some(value => value && value.includes(query)));
       }
 
-      if (!targetKey && isNumeric) {
-        let minDiff = Infinity;
-        let targetIndex = -1;
-
-        if (tableData.type === 'critical_properties') {
-          const prop = jumpProperty === 'substance' ? 'M' : jumpProperty;
-          const targetVal =
-            prop === 'T_cr'
-              ? tempUnit === 'C'
-                ? val1 + 273.15
-                : val1
-              : prop === 'P_cr'
-              ? pressUnit === 'kPa'
-                ? val1 / 1000
-                : pressUnit === 'bar'
-                ? val1 / 10
-                : val1
-              : val1;
-
-          tableData.rows.forEach((row, idx) => {
-            const cell = row[prop as 'M' | 'R' | 'T_cr' | 'P_cr' | 'v_cr'];
-            if (cell) {
-              const diff = Math.abs(cell.v - targetVal);
-              if (diff < minDiff) {
-                minDiff = diff;
-                targetIndex = idx;
-              }
-            }
-          });
-        } else if (tableData.type === 'specific_heat_300k') {
-          const prop = jumpProperty === 'substance' ? 'cp' : jumpProperty;
-          tableData.rows.forEach((row, idx) => {
-            const cell = row[prop as 'R' | 'cp' | 'cv' | 'k'];
-            if (cell) {
-              const diff = Math.abs(cell.v - val1);
-              if (diff < minDiff) {
-                minDiff = diff;
-                targetIndex = idx;
-              }
-            }
-          });
-        } else if (tableData.type === 'specific_heat_poly') {
-          tableData.rows.forEach((row, idx) => {
-            const diff = Math.abs(row.a.v - val1);
-            if (diff < minDiff) {
-              minDiff = diff;
-              targetIndex = idx;
-            }
-          });
-        } else if (tableData.type === 'liquids') {
-          const prop = jumpProperty === 'substance' ? 'T_boil' : jumpProperty;
-          const isTempProp = prop === 'T_boil' || prop === 'T_freeze' || prop === 'T_liq';
-          const targetVal = isTempProp && tempUnit === 'K' ? val1 - 273.15 : val1;
-          tableData.rows.forEach((row, idx) => {
-            const cell = row[prop as 'T_boil' | 'T_freeze' | 'T_liq' | 'rho' | 'cp'];
-            if (cell) {
-              const diff = Math.abs(cell.v - targetVal);
-              if (diff < minDiff) {
-                minDiff = diff;
-                targetIndex = idx;
-              }
-            }
-          });
-        } else if (tableData.type === 'solids') {
-          const prop = jumpProperty === 'substance' ? 'rho' : jumpProperty;
-          tableData.rows.forEach((row, idx) => {
-            if (prop === 'T' && row.T) {
-              const rowTempInCurrentUnit =
-                row.T_nativeUnit === 'K'
-                  ? tempUnit === 'C'
-                    ? row.T.v - 273.15
-                    : row.T.v
-                  : tempUnit === 'K'
-                  ? row.T.v + 273.15
-                  : row.T.v;
-              const diff = Math.abs(rowTempInCurrentUnit - val1);
-              if (diff < minDiff) {
-                minDiff = diff;
-                targetIndex = idx;
-              }
-            } else {
-              const cell = row[prop as 'rho' | 'cp'];
-              if (cell) {
-                const diff = Math.abs(cell.v - val1);
-                if (diff < minDiff) {
-                  minDiff = diff;
-                  targetIndex = idx;
-                }
-              }
-            }
-          });
-        } else if (tableData.type === 'foods') {
-          const prop = jumpProperty === 'substance' ? 'T_freeze' : jumpProperty;
-          const targetVal = prop === 'T_freeze' && tempUnit === 'K' ? val1 - 273.15 : val1;
-          tableData.rows.forEach((row, idx) => {
-            const cell = row[prop as 'waterContent' | 'T_freeze' | 'cp_above' | 'cp_below' | 'h_if'];
-            if (cell) {
-              const diff = Math.abs(cell.v - targetVal);
-              if (diff < minDiff) {
-                minDiff = diff;
-                targetIndex = idx;
-              }
-            }
-          });
-        }
-
-        if (targetIndex !== -1) targetKey = targetIndex.toString();
+      // Preserve the existing shortcut where a numeric query with Substance selected
+      // searches the table's default numeric property.
+      if (targetIndex === -1 && isNumeric) {
+        const defaults: Record<string, string> = {
+          critical_properties: 'M', specific_heat_300k: 'cp', specific_heat_poly: 'a',
+          liquids: 'T_boil', solids: 'rho', foods: 'T_freeze',
+        };
+        option = jumpOptions.find(item => item.id === defaults[tableData.type]);
       }
     }
 
-    if (targetKey && rowRefs.current[targetKey]) {
-      rowRefs.current[targetKey]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      setHighlightedRowIndex(targetKey);
-      setTimeout(() => setHighlightedRowIndex(null), 2000);
+    if (targetIndex === -1 && isNumeric && option) {
+      targetIndex = findNearestRow(option, tableData.rows.length, number);
     }
+    if (targetIndex === -1) return;
+
+    const columnId = option?.columnId ?? 'substance';
+    if (tableData.type === 'saturated') {
+      const group = ['vf', 'vg'].includes(columnId) ? 'volume'
+        : ['uf', 'ufg', 'ug'].includes(columnId) ? 'energy'
+        : ['hf', 'hfg', 'hg'].includes(columnId) ? 'enthalpy'
+        : ['sf', 'sfg', 'sg'].includes(columnId) ? 'entropy' : null;
+      if (group) setVisibleCols(previous => previous[group] ? previous : { ...previous, [group]: true });
+    } else if (tableData.type === 'specific_heat_temp' && columnId.includes('_')) {
+      const gas = columnId.split('_')[0];
+      const key = `gas_${gas}`;
+      setVisibleCols(previous => previous[key] === false ? { ...previous, [key]: true } : previous);
+    } else if (tableData.type === 'ideal_gas_air' || tableData.type === 'ideal_gas_molar') {
+      if (!isPropertyVisible(columnId)) {
+        setTablePropertyVisibility(previous => ({
+          ...previous,
+          [currentTableId]: { ...previous[currentTableId], [`property_${columnId}`]: true },
+        }));
+      }
+    }
+
+    const key = targetIndex.toString();
+    setHighlightedRowIndex(key);
+    requestAnimationFrame(() => {
+      const row = rowRefs.current[key];
+      const cell = row?.querySelector<HTMLElement>(`[data-col-id="${columnId}"]`);
+      (cell || row)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    });
+    setTimeout(() => setHighlightedRowIndex(null), 2000);
   };
 
   const togglePin = (key: string) => {
@@ -957,6 +867,17 @@ export default function App() {
 
   const activeA2bGases = A2B_GAS_GROUPS.filter(g => visibleCols[`gas_${g.id}`] !== false);
   const collapsedA2bGases = A2B_GAS_GROUPS.filter(g => visibleCols[`gas_${g.id}`] === false);
+
+  const propertyColumns = tableData?.type === 'superheated' || tableData?.type === 'compressed'
+    ? ISOBAR_PROPERTY_COLUMNS
+    : tableData?.type === 'ideal_gas_air'
+      ? IDEAL_AIR_PROPERTY_COLUMNS
+      : tableData?.type === 'ideal_gas_molar'
+        ? IDEAL_MOLAR_PROPERTY_COLUMNS
+        : [];
+  const tableNote = (tableData?.type === 'liquids' || tableData?.type === 'foods')
+    ? tableData.footnote
+    : TABLE_NOTES[currentTableId];
 
   const filteredTables = SUPPORTED_TABLES.filter(t => {
     const q = tableSearchQuery.toLowerCase().trim();
@@ -1108,7 +1029,7 @@ export default function App() {
         tableData={tableData}
         tempUnit={tempUnit}
         pressUnit={pressUnit}
-        visibleCols={visibleCols}
+        visibleCols={snippetVisibleCols}
         pinnedRows={pinnedRows}
         pinnedTemps={pinnedTemps}
         pinnedBlocks={pinnedBlocks}
@@ -1237,163 +1158,69 @@ export default function App() {
           </div>
           
           {/* Jump-to & Snippet Controls */}
-          <div className="flex flex-nowrap items-center gap-1.5 sm:gap-2 bg-black/15 dark:bg-black/25 p-1.5 rounded-md border border-white/20 dark:border-white/15 shrink-0 w-full md:w-auto text-gray-900 dark:text-gray-100 relative">
-            <Search className="w-4 h-4 text-white/80 ml-0.5 sm:ml-1 shrink-0" />
+          <div className="flex flex-nowrap items-center gap-1 sm:gap-2 bg-black/15 dark:bg-black/25 p-1.5 rounded-md border border-white/20 dark:border-white/15 shrink-0 w-full md:w-auto text-gray-900 dark:text-gray-100 relative">
+            <Search className="hidden sm:block w-4 h-4 text-white/80 ml-1 shrink-0" />
             
             {(tableData?.type === 'superheated' || tableData?.type === 'compressed') ? (
               <div className="flex items-center gap-1.5 flex-1 min-w-0 md:flex-initial">
                 <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
-                  <input 
+                  <input
                     ref={jumpInputRef}
-                    type="number" 
+                    type="number"
                     step="any"
-                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
+                    aria-label="Pressure to jump to"
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-base sm:text-sm w-full md:w-28 min-w-0 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
                     placeholder="Pressure"
-                    title="Pressure value to jump to"
                     value={jumpValue}
                     onChange={(e) => setJumpValue(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleJump()}
                   />
                   {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
                 </div>
-                <select 
-                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
+                <select
+                  aria-label="Pressure unit"
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
                   value={jumpSuperheatedUnit}
                   onChange={(e) => {
-                    const u = e.target.value as PressUnit;
-                    setJumpSuperheatedUnit(u);
-                    setPressUnit(u);
+                    const unit = e.target.value as PressUnit;
+                    setJumpSuperheatedUnit(unit);
+                    setPressUnit(unit);
                   }}
                 >
-                  <option value="MPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">MPa</option>
-                  <option value="kPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">kPa</option>
-                  <option value="bar" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">bar</option>
+                  <option value="MPa">MPa</option>
+                  <option value="kPa">kPa</option>
+                  <option value="bar">bar</option>
                 </select>
               </div>
-            ) : (tableData?.type === 'ideal_gas_air' || tableData?.type === 'ideal_gas_molar' || tableData?.type === 'specific_heat_temp') ? (
-              <>
-                <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
-                  <input 
-                    ref={jumpInputRef}
-                    type="number" 
-                    step="any"
-                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
-                    placeholder="Temp"
-                    value={jumpValue}
-                    onChange={(e) => setJumpValue(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleJump()}
-                  />
-                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
-                </div>
-                <select 
-                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
-                  value={tempUnit}
-                  onChange={(e) => setTempUnit(e.target.value as TempUnit)}
-                >
-                  <option value="C" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Temp (°C)</option>
-                  <option value="K" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Temp (K)</option>
-                </select>
-              </>
-            ) : tableData?.type === 'saturated' ? (
-              <>
-                <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
-                  <input 
-                    ref={jumpInputRef}
-                    type="number" 
-                    step="any"
-                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
-                    placeholder="Value"
-                    value={jumpValue}
-                    onChange={(e) => setJumpValue(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleJump()}
-                  />
-                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
-                </div>
-                <select 
-                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
-                  value={jumpProperty}
-                  onChange={(e) => setJumpProperty(e.target.value)}
-                >
-                  <option value="T" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-                    Temp ({tempUnit === 'C' ? '°C' : 'K'})
-                  </option>
-                  <option value="P" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-                    Psat ({pressUnit})
-                  </option>
-                </select>
-              </>
             ) : (
               <>
                 <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
-                  <input 
+                  <input
                     ref={jumpInputRef}
-                    type="text"
-                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-36 min-w-[80px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
-                    placeholder={jumpProperty === 'substance' ? 'Substance or val' : 'Value'}
+                    type={jumpProperty === 'substance' ? 'text' : 'number'}
+                    step={jumpProperty === 'substance' ? undefined : 'any'}
+                    aria-label={jumpProperty === 'substance' ? 'Substance or formula to jump to' : 'Value to jump to'}
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-base sm:text-sm w-full md:w-28 min-w-0 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
+                    placeholder={jumpProperty === 'substance' ? 'Name' : 'Value'}
                     value={jumpValue}
                     onChange={(e) => setJumpValue(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleJump()}
                   />
                   {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
                 </div>
-                <select 
-                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
+                <select
+                  aria-label="Jump property"
+                  title={jumpProperty === 'substance' ? 'Substance' : jumpOptions.find(option => option.id === jumpProperty)?.label}
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-base sm:text-sm w-[104px] sm:w-40 max-w-[35vw] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
                   value={jumpProperty}
                   onChange={(e) => setJumpProperty(e.target.value)}
                 >
-                  <option value="substance" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-                    Substance
-                  </option>
-                  {tableData?.type === 'critical_properties' && (
-                    <>
-                      <option value="M" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">M (kg/kmol)</option>
-                      <option value="R" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">R (kJ/kg·K)</option>
-                      <option value="T_cr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_cr ({tempUnit === 'C' ? '°C' : 'K'})</option>
-                      <option value="P_cr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">P_cr ({pressUnit})</option>
-                      <option value="v_cr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">v_cr (m³/kmol)</option>
-                    </>
+                  {tableData && 'rows' in tableData && tableData.rows.length > 0 && 'substance' in tableData.rows[0] && (
+                    <option value="substance">Name</option>
                   )}
-                  {tableData?.type === 'specific_heat_300k' && (
-                    <>
-                      <option value="R" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">R (kJ/kg·K)</option>
-                      <option value="cp" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp (kJ/kg·K)</option>
-                      <option value="cv" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cv (kJ/kg·K)</option>
-                      <option value="k" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">k</option>
-                    </>
-                  )}
-                  {tableData?.type === 'specific_heat_poly' && (
-                    <>
-                      <option value="a" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">a</option>
-                      <option value="b" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">b × 10²</option>
-                    </>
-                  )}
-                  {tableData?.type === 'liquids' && (
-                    <>
-                      <option value="T_boil" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_boil ({tempUnit === 'C' ? '°C' : 'K'})</option>
-                      <option value="h_fg" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">h_fg (kJ/kg)</option>
-                      <option value="T_freeze" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_freeze ({tempUnit === 'C' ? '°C' : 'K'})</option>
-                      <option value="h_if" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">h_if (kJ/kg)</option>
-                      <option value="T_liq" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_liq ({tempUnit === 'C' ? '°C' : 'K'})</option>
-                      <option value="rho" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">ρ (kg/m³)</option>
-                      <option value="cp" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp (kJ/kg·K)</option>
-                    </>
-                  )}
-                  {tableData?.type === 'solids' && (
-                    <>
-                      <option value="T" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Temp ({tempUnit === 'C' ? '°C' : 'K'})</option>
-                      <option value="rho" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">ρ (kg/m³)</option>
-                      <option value="cp" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp (kJ/kg·K)</option>
-                    </>
-                  )}
-                  {tableData?.type === 'foods' && (
-                    <>
-                      <option value="waterContent" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Water (%)</option>
-                      <option value="T_freeze" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_freeze ({tempUnit === 'C' ? '°C' : 'K'})</option>
-                      <option value="cp_above" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp above (kJ/kg·K)</option>
-                      <option value="cp_below" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp below (kJ/kg·K)</option>
-                      <option value="h_if" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">h_if (kJ/kg)</option>
-                    </>
-                  )}
+                  {jumpOptions.map(option => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
                 </select>
               </>
             )}
@@ -1405,7 +1232,7 @@ export default function App() {
               Jump
             </button>
 
-            <div className="h-5 w-px bg-white/25 shrink-0 mx-0.5" />
+            <div className="hidden sm:block h-5 w-px bg-white/25 shrink-0 mx-0.5" />
 
             <button
               type="button"
@@ -1436,18 +1263,18 @@ export default function App() {
         {/* Sub-table switcher bar for A-2(a,b,c) and A-3(a,b,c) */}
         {(currentTableId.startsWith('A-2') || currentTableId.startsWith('A-3')) && (
           <div
-            className="bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-4 py-1.5 flex items-center justify-between gap-2 shrink-0 flex-wrap"
+            className="bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-2 sm:px-4 py-1.5 flex items-center justify-between gap-2 shrink-0 flex-wrap"
             onMouseEnter={clearAllHover}
           >
             <div className="flex items-center gap-1.5 flex-wrap">
-              <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 mr-1">
+              <span className="hidden sm:inline text-xs font-semibold text-gray-500 dark:text-gray-400 mr-1">
                 {currentTableId.startsWith('A-2') ? 'Table A-2 Parts:' : 'Table A-3 Parts:'}
               </span>
               {(currentTableId.startsWith('A-2')
                 ? [
-                    { id: 'A-2a', label: '(a) At 300 K' },
-                    { id: 'A-2b', label: '(b) At Various Temps' },
-                    { id: 'A-2c', label: '(c) Polynomial c̄p(T)' },
+                    { id: 'A-2a', label: '(a) 300 K' },
+                    { id: 'A-2b', label: '(b) Varying T' },
+                    { id: 'A-2c', label: '(c) Polynomial' },
                   ]
                 : [
                     { id: 'A-3a', label: '(a) Liquids' },
@@ -1477,6 +1304,72 @@ export default function App() {
               <span className="text-xs font-mono text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 px-2.5 py-0.5 rounded border border-gray-200 dark:border-gray-700">
                 c̄p = a + bT + cT² + dT³ &nbsp;(T in K, c̄p in kJ/kmol·K)
               </span>
+            )}
+          </div>
+        )}
+
+        {tableData && (tableData.type !== 'specific_heat_300k' || tableNote) && (
+          <div className="flex flex-wrap items-center gap-x-2 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-2 sm:px-4 shrink-0">
+            {tableData.type !== 'specific_heat_300k' && <div className="flex items-center gap-2 py-1 text-xs font-semibold text-gray-700 dark:text-gray-200">
+              <label className="flex items-center gap-1">
+                <span>Temp</span>
+                <select
+                  aria-label="Table temperature unit"
+                  value={tempUnit}
+                  onChange={e => setTempUnit(e.target.value as TempUnit)}
+                  className="min-h-8 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-1 text-base sm:text-xs"
+                >
+                  <option value="C">°C</option>
+                  <option value="K">K</option>
+                </select>
+              </label>
+              {(tableData.type === 'saturated' || tableData.type === 'critical_properties' || tableData.type === 'superheated' || tableData.type === 'compressed') && (
+                <label className="flex items-center gap-1">
+                  <span>Press</span>
+                  <select
+                    aria-label="Table pressure unit"
+                    value={pressUnit}
+                    onChange={e => {
+                      const unit = e.target.value as PressUnit;
+                      setPressUnit(unit);
+                      setJumpSuperheatedUnit(unit);
+                    }}
+                    className="min-h-8 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-1 text-base sm:text-xs"
+                  >
+                    <option value="kPa">kPa</option>
+                    <option value="MPa">MPa</option>
+                    <option value="bar">bar</option>
+                  </select>
+                </label>
+              )}
+            </div>}
+            {propertyColumns.length > 0 && (
+              <fieldset aria-label="Visible property columns" className="flex flex-wrap items-center gap-x-1 min-w-0">
+                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">Columns:</span>
+                {propertyColumns.map(column => (
+                  <label key={column.id} className="inline-flex items-center gap-1 px-1.5 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 cursor-pointer rounded hover:bg-gray-100 dark:hover:bg-gray-800">
+                    <input
+                      type="checkbox"
+                      checked={isPropertyVisible(column.id)}
+                      onChange={() => togglePropertyVisibility(column.id)}
+                      aria-label={`Show ${column.label} column`}
+                      className="w-4 h-4 accent-[#c13726] cursor-pointer"
+                    />
+                    {column.label}
+                  </label>
+                ))}
+              </fieldset>
+            )}
+            {tableNote && (
+              <details key={currentTableId} className="relative z-50 ml-auto text-xs text-gray-700 dark:text-gray-200">
+                <summary aria-label="Table notes" title="Table notes" className="flex cursor-pointer list-none items-center gap-1 rounded px-2 py-2 font-semibold hover:bg-gray-200 dark:hover:bg-gray-800">
+                  <Info className="h-4 w-4" aria-hidden="true" />
+                  <span className="hidden sm:inline">Table notes</span>
+                </summary>
+                <div className="absolute right-0 top-full w-[min(90vw,24rem)] max-h-[50vh] overflow-y-auto rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 leading-relaxed shadow-xl">
+                  {tableNote}
+                </div>
+              </details>
             )}
           </div>
         )}
@@ -1896,23 +1789,6 @@ export default function App() {
                     {tableData.blocks.length - disabledBlocks.size} of {tableData.blocks.length} isobars visible
                   </span>
                   <div className="flex items-center gap-2 sm:gap-3">
-                    <div className="flex items-center gap-1.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-2 py-1 rounded text-xs">
-                      <span className="font-semibold text-gray-600 dark:text-gray-300">Pressure:</span>
-                      <select 
-                        value={pressUnit} 
-                        onChange={e => {
-                          const u = e.target.value as PressUnit;
-                          setPressUnit(u);
-                          setJumpSuperheatedUnit(u);
-                        }}
-                        className="bg-transparent border-b border-gray-300 dark:border-gray-600 font-semibold text-gray-800 dark:text-gray-200 cursor-pointer focus:outline-none hover:border-red-600 dark:hover:border-red-400 transition-colors"
-                      >
-                        <option value="MPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">MPa</option>
-                        <option value="kPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">kPa</option>
-                        <option value="bar" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">bar</option>
-                      </select>
-                    </div>
-
                     <div className="relative" ref={filterMenuRef}>
                       <button 
                         onClick={() => setShowBlockFilter(!showBlockFilter)}
@@ -1994,10 +1870,10 @@ export default function App() {
                                     <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                                       <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                                       {renderColHeader('T', 'Temp', '°C', 'min-w-[68px]')}
-                                      {renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
-                                      {renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
-                                      {renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
-                                      {renderColHeader('s', 's', 'kJ/kg·K', 'min-w-[85px]')}
+                                      {isPropertyVisible('v') && renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
+                                      {isPropertyVisible('u') && renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
+                                      {isPropertyVisible('h') && renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
+                                      {isPropertyVisible('s') && renderColHeader('s', 's', 'kJ/kg·K', 'min-w-[85px]')}
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -2029,10 +1905,10 @@ export default function App() {
                                              </button>
                                            </td>
                                            <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
-                                          <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>
-                                          <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>
-                                          <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>
-                                          <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>
+                                          {isPropertyVisible('v') && <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>}
+                                          {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
+                                          {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
+                                          {isPropertyVisible('s') && <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>}
                                         </tr>
                                       );
                                    })}
@@ -2095,10 +1971,10 @@ export default function App() {
                                     <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                                       <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                                       {renderColHeader('T', 'Temp', '°C', 'min-w-[68px]')}
-                                      {renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
-                                      {renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
-                                      {renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
-                                      {renderColHeader('s', 's', 'kJ/kg·K', 'min-w-[85px]')}
+                                      {isPropertyVisible('v') && renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
+                                      {isPropertyVisible('u') && renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
+                                      {isPropertyVisible('h') && renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
+                                      {isPropertyVisible('s') && renderColHeader('s', 's', 'kJ/kg·K', 'min-w-[85px]')}
                                     </tr>
                                   </thead>
                                   <tbody>
@@ -2130,10 +2006,10 @@ export default function App() {
                                               </button>
                                             </td>
                                             <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
-                                            <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>
-                                            <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>
-                                            <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>
-                                            <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>
+                                            {isPropertyVisible('v') && <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>}
+                                            {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
+                                            {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
+                                            {isPropertyVisible('s') && <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>}
                                           </tr>
                                         );
                                     })}
@@ -2157,10 +2033,10 @@ export default function App() {
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('T', 'Temp', tempUnit === 'C' ? '°C' : 'K', 'min-w-[70px]', 'temp')}
-                    {renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
-                    {renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
-                    {renderColHeader('s_deg', 's°', 'kJ/kg·K', 'min-w-[85px]')}
-                    {renderColHeader('s_plus', 's+', 'kJ/kg·K', 'min-w-[85px]')}
+                    {isPropertyVisible('h') && renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
+                    {isPropertyVisible('u') && renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
+                    {isPropertyVisible('s_deg') && renderColHeader('s_deg', 's°', 'kJ/kg·K', 'min-w-[85px]')}
+                    {isPropertyVisible('s_plus') && renderColHeader('s_plus', 's+', 'kJ/kg·K', 'min-w-[85px]')}
                   </tr>
                 </thead>
                 <tbody>
@@ -2197,10 +2073,10 @@ export default function App() {
                           </button>
                         </td>
                         <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
-                        <Td colId="h" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>
-                        <Td colId="u" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>
-                        <Td colId="s_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_deg'} isColSelected={selectedCols.has('s_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_deg.s}</Td>
-                        <Td colId="s_plus" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_plus'} isColSelected={selectedCols.has('s_plus')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_plus?.s || '-'}</Td>
+                        {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
+                        {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
+                        {isPropertyVisible('s_deg') && <Td colId="s_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_deg'} isColSelected={selectedCols.has('s_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_deg.s}</Td>}
+                        {isPropertyVisible('s_plus') && <Td colId="s_plus" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_plus'} isColSelected={selectedCols.has('s_plus')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_plus?.s || '-'}</Td>}
                       </tr>
                     );
                   })}
@@ -2215,9 +2091,9 @@ export default function App() {
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('T', 'Temp', tempUnit === 'C' ? '°C' : 'K', 'min-w-[70px]', 'temp')}
-                    {renderColHeader('h_bar', 'h̄', 'kJ/kmol', 'min-w-[90px]')}
-                    {renderColHeader('u_bar', 'ū', 'kJ/kmol', 'min-w-[90px]')}
-                    {renderColHeader('s_bar_deg', 's̄°', 'kJ/kmol·K', 'min-w-[90px]')}
+                    {isPropertyVisible('h_bar') && renderColHeader('h_bar', 'h̄', 'kJ/kmol', 'min-w-[90px]')}
+                    {isPropertyVisible('u_bar') && renderColHeader('u_bar', 'ū', 'kJ/kmol', 'min-w-[90px]')}
+                    {isPropertyVisible('s_bar_deg') && renderColHeader('s_bar_deg', 's̄°', 'kJ/kmol·K', 'min-w-[90px]')}
                   </tr>
                 </thead>
                 <tbody>
@@ -2254,9 +2130,9 @@ export default function App() {
                           </button>
                         </td>
                         <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
-                        <Td colId="h_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_bar'} isColSelected={selectedCols.has('h_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_bar.s}</Td>
-                        <Td colId="u_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u_bar'} isColSelected={selectedCols.has('u_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u_bar.s}</Td>
-                        <Td colId="s_bar_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_bar_deg'} isColSelected={selectedCols.has('s_bar_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_bar_deg.s}</Td>
+                        {isPropertyVisible('h_bar') && <Td colId="h_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_bar'} isColSelected={selectedCols.has('h_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_bar.s}</Td>}
+                        {isPropertyVisible('u_bar') && <Td colId="u_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u_bar'} isColSelected={selectedCols.has('u_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u_bar.s}</Td>}
+                        {isPropertyVisible('s_bar_deg') && <Td colId="s_bar_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_bar_deg'} isColSelected={selectedCols.has('s_bar_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_bar_deg.s}</Td>}
                       </tr>
                     );
                   })}
@@ -2608,9 +2484,9 @@ export default function App() {
                     {renderColHeader('substance', 'Substance', '', 'min-w-[160px]')}
                     {renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
                     {renderColHeader('a', 'a', '', 'min-w-[90px]')}
-                    {renderColHeader('b', 'b × 10²', '', 'min-w-[100px]')}
-                    {renderColHeader('c', 'c × 10⁵', '', 'min-w-[100px]')}
-                    {renderColHeader('d', 'd × 10⁹', '', 'min-w-[100px]')}
+                    {renderColHeader('b', 'b', '', 'min-w-[100px]')}
+                    {renderColHeader('c', 'c', '', 'min-w-[100px]')}
+                    {renderColHeader('d', 'd', '', 'min-w-[100px]')}
                     {renderColHeader('tempRange', 'Temp. Range', tempUnit === 'C' ? '°C' : 'K', 'min-w-[140px]', 'temp')}
                     {renderColHeader('errorMax', 'Max. Error', '%', 'min-w-[100px]')}
                     {renderColHeader('errorAvg', 'Avg. Error', '%', 'min-w-[100px]')}

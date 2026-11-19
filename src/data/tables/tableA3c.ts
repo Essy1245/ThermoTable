@@ -4,7 +4,7 @@ export const tableA3c: ThermoTableData = {
   type: 'foods',
   name: 'Table A-3(c): Properties of common liquids, solids, and foods — Foods',
   substance: 'Common Foods',
-  footnote: 'Values are obtained from ASHRAE, Handbook of Fundamentals, SI version (Atlanta, GA: American Society of Heating, Refrigerating, and Air-Conditioning Engineers, Inc., 1993), Chap. 30, Table 1.',
+  footnote: 'Source of Data: Values are obtained from various handbooks and other sources or are calculated. Water content and freezing-point data of foods are from ASHRAE, Handbook of Fundamentals, SI version (Atlanta, GA: American Society of Heating, Refrigerating and Air-Conditioning Engineers, Inc., 1993), Chapter 30, Table 1. Freezing point is the temperature at which freezing starts for fruits and vegetables, and the average freezing temperature for other foods.',
   rows: [
     { substance: 'Apples', waterContent: { v: 84, s: '84' }, T_freeze: { v: -1.1, s: '−1.1' }, cp_above: { v: 3.65, s: '3.65' }, cp_below: { v: 1.90, s: '1.90' }, h_if: { v: 281, s: '281' } },
     { substance: 'Bananas', waterContent: { v: 75, s: '75' }, T_freeze: { v: -0.8, s: '−0.8' }, cp_above: { v: 3.35, s: '3.35' }, cp_below: { v: 1.78, s: '1.78' }, h_if: { v: 251, s: '251' } },

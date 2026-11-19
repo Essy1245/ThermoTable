@@ -7,15 +7,18 @@ TabTab is a modern, high-speed, interactive web application that brings standard
 ## Features
 
 - **17 Interactive Property Tables**: Comprehensive SI property tables covering:
+  - **Molar Mass, Gas Constants and Critical Properties**: Table A-1
+  - **Ideal-Gas Specific Heats**: Tables A-2(a), A-2(b), and A-2(c)
+  - **Liquids, Solids, and Foods**: Tables A-3(a), A-3(b), and A-3(c)
   - **Saturated Water**: Table A-4 (Temperature) & Table A-5 (Pressure)
   - **Superheated Water Vapor**: Table A-6
   - **Compressed Liquid Water**: Table A-7
-  - **Saturated Ice–Water Vapor**: Table A-8
   - **Saturated Refrigerant-134a**: Table A-11 (Temperature) & Table A-12 (Pressure)
   - **Superheated Refrigerant-134a**: Table A-13
   - **Ideal Gas Properties of Air**: Table A-17
-  - **Molar Ideal Gases**: Table A-18 ($\text{N}_2$), A-19 ($\text{O}_2$), A-20 ($\text{CO}_2$), A-21 ($\text{CO}$), A-22 ($\text{H}_2$), A-23 ($\text{H}_2\text{O}$), A-24 ($\text{O}$), A-25 ($\text{OH}$)
-- **Smart Jump-To Search (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>K</kbd>)**: Instantly jump to the nearest temperature or pressure value with visual highlighting and automatic scrolling.
+  - **Molar Ideal Gases**: Table A-18 ($\text{N}_2$) and A-19 ($\text{O}_2$)
+- **Smart Jump-To Search (<kbd>Ctrl</kbd>/<kbd>Cmd</kbd> + <kbd>K</kbd>)**: Find the nearest selected property value or a substance, with visual highlighting and automatic scrolling. Multi-isobar tables use pressure to find a block.
+- **Property Visibility**: Show or hide individual properties on superheated, compressed, and ideal-gas tables; choices are remembered per table.
 - **Fast Table Switcher (<kbd>Tab</kbd>)**: Quick search menu with fuzzy table lookup, substance badges, and state filters.
 - **Copy-Pasteable Snippet Generator**: Export publication-grade textbook image snippets with dark-mode immunity, 1:1 square auto-packing, and interactive cell emphasis circles.
 - **Row, Column, & Block Pinning**: Pin isotherms, specific property columns, or entire isobars to compare data side-by-side.
@@ -50,15 +53,15 @@ TabTab is a modern, high-speed, interactive web application that brings standard
 ## Getting Started
 
 ### Prerequisites
-- Node.js (v18 or higher recommended)
+- Node.js 22.12 or newer (the test command requires Node.js 22's TypeScript stripping support)
 - npm or pnpm
 
 ### Installation
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/sungc/fearless-hypatia.git
-   cd fearless-hypatia
+   git clone https://github.com/Essy1245/ThermoTable.git
+   cd ThermoTable
    ```
 
 2. Install dependencies:
@@ -78,6 +81,9 @@ TabTab is a modern, high-speed, interactive web application that brings standard
 ```bash
 # Run linter
 npm run lint
+
+# Run focused regression tests
+npm test
 
 # Build optimized production assets
 npm run build
