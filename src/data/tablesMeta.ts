@@ -3,12 +3,75 @@ export interface TableMeta {
   name: string;
   title: string;
   description: string;
-  state: 'Saturated' | 'Superheated' | 'Compressed' | 'Ideal Gas' | 'Saturated Solid-Vapor';
-  substance: 'Water' | 'R-134a' | 'Air' | 'N2' | 'O2' | 'CO2' | 'CO' | 'H2' | 'H2O Vapor' | 'Monatomic O' | 'Hydroxyl OH';
-  type: 'Temperature' | 'Pressure' | 'Properties';
+  state: 'General Reference' | 'Saturated' | 'Superheated' | 'Compressed' | 'Ideal Gas' | 'Liquids, Solids & Foods';
+  substance: 'Various Substances' | 'Common Gases' | 'Liquids' | 'Solids' | 'Foods' | 'Water' | 'R-134a' | 'Air' | 'N2' | 'O2';
+  type: 'Properties' | 'Specific Heats' | 'Temperature' | 'Pressure';
 }
 
 export const SUPPORTED_TABLES: TableMeta[] = [
+  {
+    id: 'A-1',
+    name: 'Table A-1',
+    title: 'Molar mass, gas constant, and critical-point properties',
+    description: 'Molar mass, gas constant, and critical-point temperature, pressure, and molar volume for 34 common engineering substances.',
+    state: 'General Reference',
+    substance: 'Various Substances',
+    type: 'Properties',
+  },
+  {
+    id: 'A-2a',
+    name: 'Table A-2(a)',
+    title: 'Ideal-gas specific heats of various common gases — At 300 K',
+    description: 'Gas constant R, constant-pressure specific heat cp, constant-volume specific heat cv, and specific heat ratio k at 300 K.',
+    state: 'Ideal Gas',
+    substance: 'Common Gases',
+    type: 'Specific Heats',
+  },
+  {
+    id: 'A-2b',
+    name: 'Table A-2(b)',
+    title: 'Ideal-gas specific heats of various common gases — At various temperatures',
+    description: 'Specific heats cp, cv, and specific heat ratio k for Air, CO₂, CO, H₂, N₂, and O₂ from 250 K to 1000 K.',
+    state: 'Ideal Gas',
+    substance: 'Common Gases',
+    type: 'Temperature',
+  },
+  {
+    id: 'A-2c',
+    name: 'Table A-2(c)',
+    title: 'Ideal-gas specific heats of various common gases — As a function of temperature',
+    description: 'Polynomial coefficients (c̄p = a + bT + cT² + dT³), valid temperature ranges, and percent error bounds for 28 gases.',
+    state: 'Ideal Gas',
+    substance: 'Common Gases',
+    type: 'Specific Heats',
+  },
+  {
+    id: 'A-3a',
+    name: 'Table A-3(a)',
+    title: 'Properties of common liquids, solids, and foods — Liquids',
+    description: 'Normal boiling point, latent heat of vaporization, freezing point, latent heat of fusion, density, and specific heat of common liquids.',
+    state: 'Liquids, Solids & Foods',
+    substance: 'Liquids',
+    type: 'Properties',
+  },
+  {
+    id: 'A-3b',
+    name: 'Table A-3(b)',
+    title: 'Properties of common liquids, solids, and foods — Solids',
+    description: 'Density and specific heat of common metallic and nonmetallic solids at room temperature and selected temperatures.',
+    state: 'Liquids, Solids & Foods',
+    substance: 'Solids',
+    type: 'Properties',
+  },
+  {
+    id: 'A-3c',
+    name: 'Table A-3(c)',
+    title: 'Properties of common liquids, solids, and foods — Foods',
+    description: 'Water content, freezing point, specific heats above and below freezing, and latent heat of fusion for common foods.',
+    state: 'Liquids, Solids & Foods',
+    substance: 'Foods',
+    type: 'Properties',
+  },
   {
     id: 'A-4',
     name: 'Table A-4',
@@ -44,15 +107,6 @@ export const SUPPORTED_TABLES: TableMeta[] = [
     state: 'Compressed',
     substance: 'Water',
     type: 'Pressure',
-  },
-  {
-    id: 'A-8',
-    name: 'Table A-8',
-    title: 'Saturated ice–water vapor',
-    description: 'Sublimation equilibrium properties of solid ice and water vapor at sub-zero temperatures (-40 °C to 0.01 °C).',
-    state: 'Saturated Solid-Vapor',
-    substance: 'Water',
-    type: 'Temperature',
   },
   {
     id: 'A-11',
@@ -106,60 +160,6 @@ export const SUPPORTED_TABLES: TableMeta[] = [
     description: 'Molar enthalpy, internal energy, and absolute entropy of oxygen gas from 220 K to 3250 K.',
     state: 'Ideal Gas',
     substance: 'O2',
-    type: 'Temperature',
-  },
-  {
-    id: 'A-20',
-    name: 'Table A-20',
-    title: 'Ideal-gas properties of carbon dioxide, CO₂',
-    description: 'Molar enthalpy, internal energy, and absolute entropy of carbon dioxide gas from 220 K to 3250 K.',
-    state: 'Ideal Gas',
-    substance: 'CO2',
-    type: 'Temperature',
-  },
-  {
-    id: 'A-21',
-    name: 'Table A-21',
-    title: 'Ideal-gas properties of carbon monoxide, CO',
-    description: 'Molar enthalpy, internal energy, and absolute entropy of carbon monoxide gas from 220 K to 3250 K.',
-    state: 'Ideal Gas',
-    substance: 'CO',
-    type: 'Temperature',
-  },
-  {
-    id: 'A-22',
-    name: 'Table A-22',
-    title: 'Ideal-gas properties of hydrogen, H₂',
-    description: 'Molar enthalpy, internal energy, and absolute entropy of hydrogen gas from 260 K to 3250 K.',
-    state: 'Ideal Gas',
-    substance: 'H2',
-    type: 'Temperature',
-  },
-  {
-    id: 'A-23',
-    name: 'Table A-23',
-    title: 'Ideal-gas properties of water vapor, H₂O',
-    description: 'Molar enthalpy, internal energy, and absolute entropy of gaseous water vapor from 220 K to 3250 K.',
-    state: 'Ideal Gas',
-    substance: 'H2O Vapor',
-    type: 'Temperature',
-  },
-  {
-    id: 'A-24',
-    name: 'Table A-24',
-    title: 'Ideal-gas properties of monatomic oxygen, O',
-    description: 'Molar enthalpy, internal energy, and absolute entropy of atomic oxygen from 298 K to 3500 K.',
-    state: 'Ideal Gas',
-    substance: 'Monatomic O',
-    type: 'Temperature',
-  },
-  {
-    id: 'A-25',
-    name: 'Table A-25',
-    title: 'Ideal-gas properties of hydroxyl, OH',
-    description: 'Molar enthalpy, internal energy, and absolute entropy of hydroxyl radicals from 298 K to 3500 K.',
-    state: 'Ideal Gas',
-    substance: 'Hydroxyl OH',
     type: 'Temperature',
   },
 ];

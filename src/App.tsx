@@ -5,7 +5,9 @@ import { getTableData } from './data/tables';
 import type { 
   IdealGasAirRow, 
   IdealGasMolarRow, 
-  ThermoValue 
+  ThermoValue,
+  LiquidPropertiesRow,
+  SolidPropertiesRow,
 } from './data/types';
 import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X, Pin, Crop } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
@@ -64,7 +66,44 @@ const TOOLTIPS: Record<string, string> = {
   'u': 'Internal Energy (kJ/kg): Specific internal energy.',
   'h': 'Enthalpy (kJ/kg): Total heat content (h = u + Pv).',
   's': 'Entropy (kJ/kg·K): Specific entropy.',
+  's_deg': 'Standard-state entropy function s° (kJ/kg·K).',
+  's_plus': 'Entropy function s+ (kJ/kg·K).',
+  'h_bar': 'Molar enthalpy h̄ (kJ/kmol).',
+  'u_bar': 'Molar internal energy ū (kJ/kmol).',
+  's_bar_deg': 'Molar standard-state entropy s̄° (kJ/kmol·K).',
+  'M': 'Molar mass M (kg/kmol).',
+  'R': 'Specific gas constant R = R_u / M (kJ/kg·K).',
+  'T_cr': 'Critical-point temperature above which distinct liquid and gas phases do not exist.',
+  'P_cr': 'Critical-point pressure required to liquefy a vapor at its critical temperature.',
+  'v_cr': 'Molar specific volume at the critical point (m³/kmol).',
+  'cp': 'Specific heat at constant pressure cp (kJ/kg·K).',
+  'cv': 'Specific heat at constant volume cv (kJ/kg·K).',
+  'k': 'Specific heat ratio k = cp / cv.',
+  'a': 'Constant polynomial coefficient a in c̄p = a + bT + cT² + dT³.',
+  'b': 'Linear temperature coefficient b in c̄p = a + bT + cT² + dT³.',
+  'c': 'Quadratic temperature coefficient c in c̄p = a + bT + cT² + dT³.',
+  'd': 'Cubic temperature coefficient d in c̄p = a + bT + cT² + dT³.',
+  'tempRange': 'Valid temperature range for the polynomial correlation.',
+  'errorMax': 'Maximum percentage error of the polynomial correlation over the temperature range.',
+  'errorAvg': 'Average percentage error of the polynomial correlation over the temperature range.',
+  'T_boil': 'Normal boiling point temperature at 1 atm.',
+  'T_freeze': 'Freezing point temperature at 1 atm.',
+  'h_if': 'Latent heat of fusion (melting/freezing enthalpy change) (kJ/kg).',
+  'T_liq': 'Temperature at which liquid density and specific heat are evaluated.',
+  'rho': 'Density ρ (kg/m³): Mass per unit volume.',
+  'waterContent': 'Mass percentage of water content in the food item.',
+  'cp_above': 'Specific heat above the freezing point (kJ/kg·K).',
+  'cp_below': 'Specific heat below the freezing point (kJ/kg·K).',
 };
+
+const A2B_GAS_GROUPS = [
+  { id: 'air', label: 'Air', short: 'Air' },
+  { id: 'co2', label: 'Carbon dioxide, CO₂', short: 'CO₂' },
+  { id: 'co', label: 'Carbon monoxide, CO', short: 'CO' },
+  { id: 'h2', label: 'Hydrogen, H₂', short: 'H₂' },
+  { id: 'n2', label: 'Nitrogen, N₂', short: 'N₂' },
+  { id: 'o2', label: 'Oxygen, O₂', short: 'O₂' },
+] as const;
 
 const SubHeader = React.memo(function SubHeader({
   label,
@@ -73,6 +112,9 @@ const SubHeader = React.memo(function SubHeader({
   isCategoryEnd,
   isHovered,
   isSelected,
+  unitType,
+  tempUnit,
+  onChangeTempUnit,
   onToggleHighlight,
   onMouseEnterCol,
   onMouseLeaveCol,
@@ -85,6 +127,9 @@ const SubHeader = React.memo(function SubHeader({
   isCategoryEnd?: boolean;
   isHovered: boolean;
   isSelected: boolean;
+  unitType?: 'temp';
+  tempUnit?: TempUnit;
+  onChangeTempUnit?: (u: TempUnit) => void;
   onToggleHighlight: (colId: string) => void;
   onMouseEnterCol: (colId: string) => void;
   onMouseLeaveCol: () => void;
@@ -109,6 +154,17 @@ const SubHeader = React.memo(function SubHeader({
       <div className="flex items-center justify-between gap-1.5 w-full">
         <div className="flex items-center gap-1 min-w-0">
           <span className="truncate">{label}</span>
+          {unitType === 'temp' && tempUnit && onChangeTempUnit && (
+            <select
+              className="bg-transparent border-b border-gray-300 dark:border-gray-600 text-xs font-semibold focus:outline-none cursor-pointer hover:border-red-600 dark:hover:border-red-400 text-gray-700 dark:text-gray-200 transition-colors"
+              value={tempUnit}
+              onChange={(e) => onChangeTempUnit(e.target.value as TempUnit)}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <option value="C" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">°C</option>
+              <option value="K" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">K</option>
+            </select>
+          )}
           {TOOLTIPS[prop] && (
             <Info
               className="w-3 h-3 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help shrink-0"
@@ -142,6 +198,7 @@ const SubHeader = React.memo(function SubHeader({
 const Td = React.memo(function Td({
   children,
   colId,
+  align = 'right',
   isRowHovered,
   isPinned,
   isHighlighted,
@@ -153,6 +210,7 @@ const Td = React.memo(function Td({
 }: {
   children: React.ReactNode;
   colId: string;
+  align?: 'left' | 'right' | 'center';
   isRowHovered: boolean;
   isPinned: boolean;
   isHighlighted?: boolean;
@@ -187,7 +245,8 @@ const Td = React.memo(function Td({
     <td 
       data-col-id={colId}
       className={cn(
-        "px-2 sm:px-3 py-2 text-xs sm:text-sm text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 text-right transition-colors tabular-nums whitespace-nowrap",
+        "px-2 sm:px-3 py-2 text-xs sm:text-sm text-gray-800 dark:text-gray-200 border-b border-gray-100 dark:border-gray-800 transition-colors tabular-nums whitespace-nowrap",
+        align === 'left' ? "text-left font-medium" : align === 'center' ? "text-center" : "text-right",
         isCategoryEnd ? "border-r-2 border-r-gray-300 dark:border-r-gray-700" : "border-r border-r-gray-100 dark:border-r-gray-800/80",
         bgStyle
       )}
@@ -214,6 +273,12 @@ export default function App() {
     energy: true,
     enthalpy: true,
     entropy: true,
+    gas_air: true,
+    gas_co2: true,
+    gas_co: true,
+    gas_h2: true,
+    gas_n2: true,
+    gas_o2: true,
   });
 
   const [tablePinnedRows, setTablePinnedRows] = useState<Record<string, Set<string>>>({});
@@ -378,9 +443,30 @@ export default function App() {
       setJumpSuperheatedUnit('MPa');
       setTempUnit('C');
       setJumpProperty('T');
-    } else if (targetData && (targetData.type === 'ideal_gas_air' || targetData.type === 'ideal_gas_molar')) {
+    } else if (
+      targetData &&
+      (targetData.type === 'ideal_gas_air' ||
+        targetData.type === 'ideal_gas_molar' ||
+        targetData.type === 'specific_heat_temp')
+    ) {
       setTempUnit('K');
       setJumpProperty('T');
+    } else if (targetData && targetData.type === 'critical_properties') {
+      setTempUnit('K');
+      setPressUnit('MPa');
+      setJumpProperty('substance');
+    } else if (
+      targetData &&
+      (targetData.type === 'specific_heat_300k' || targetData.type === 'specific_heat_poly')
+    ) {
+      setTempUnit('K');
+      setJumpProperty('substance');
+    } else if (
+      targetData &&
+      (targetData.type === 'liquids' || targetData.type === 'solids' || targetData.type === 'foods')
+    ) {
+      setTempUnit('C');
+      setJumpProperty('substance');
     } else {
       setPressUnit('kPa');
       setTempUnit('C');
@@ -475,12 +561,20 @@ export default function App() {
     return val.s;
   };
 
+  const formatTempFromKDisplay = (val?: ThermoValue) => {
+    if (!val) return '-';
+    if (tempUnit === 'C') {
+      return (val.v - 273.15).toFixed(2);
+    }
+    return val.s;
+  };
+
   const formatSatTemp = (val?: ThermoValue) => {
     if (!val || val.s === 'N/A') return 'N/A';
     if (tempUnit === 'K') {
-      return `${(val.v + 273.15).toFixed(2)} K`;
+      return `Tsat = ${(val.v + 273.15).toFixed(2)} K`;
     }
-    return `${val.s} °C`;
+    return `Tsat = ${val.s} °C`;
   };
 
   const formatPressDisplay = (val?: ThermoValue) => {
@@ -490,6 +584,20 @@ export default function App() {
     }
     if (pressUnit === 'bar') {
       return (val.v / 100).toFixed(4);
+    }
+    return val.s;
+  };
+
+  const formatPressFromMPaDisplay = (val?: ThermoValue) => {
+    if (!val) return '-';
+    if (pressUnit === 'kPa') {
+      return Number((val.v * 1000).toFixed(2)).toString();
+    }
+    if (pressUnit === 'bar') {
+      const decimals = val.s.includes('.')
+        ? Math.max(1, (val.s.split('.')[1]?.length || 2) - 1)
+        : 1;
+      return (val.v * 10).toFixed(decimals);
     }
     return val.s;
   };
@@ -504,9 +612,40 @@ export default function App() {
     return `${val.s} MPa`;
   };
 
+  const formatLiquidBoilTemp = (row: LiquidPropertiesRow) => {
+    if (!row.T_boil) return '—';
+    const base = formatTempDisplay(row.T_boil);
+    if (row.T_boil_max) {
+      return `${base}–${formatTempDisplay(row.T_boil_max)}${row.T_boil_note || ''}`;
+    }
+    return `${base}${row.T_boil_note || ''}`;
+  };
+
+  const formatLiquidHfg = (row: LiquidPropertiesRow) => {
+    if (!row.h_fg) return '—';
+    if (row.h_fg_max) {
+      return `${row.h_fg.s}–${row.h_fg_max.s}${row.h_fg_note || ''}`;
+    }
+    return `${row.h_fg.s}${row.h_fg_note || ''}`;
+  };
+
+  const formatSolidTemp = (row: SolidPropertiesRow) => {
+    if (!row.T) return '—';
+    return row.T_nativeUnit === 'K' ? formatTempFromKDisplay(row.T) : formatTempDisplay(row.T);
+  };
+
+  const normalizeChemText = (str: string) =>
+    str
+      .toLowerCase()
+      .replace(/[₀₁₂₃₄₅₆₇₈₉]/g, (ch) => String('₀₁₂₃₄₅₆₇₈₉'.indexOf(ch)))
+      .replace(/[\s\-_(),]/g, '');
+
   const handleJump = () => {
-    const val1 = parseFloat(jumpValue);
-    if (isNaN(val1) || !tableData) return;
+    const rawQuery = jumpValue.trim();
+    if (!rawQuery || !tableData) return;
+
+    const val1 = parseFloat(rawQuery);
+    const isNumeric = !isNaN(val1);
 
     setJumpValue('');
     jumpInputRef.current?.blur();
@@ -514,6 +653,7 @@ export default function App() {
     let targetKey: string | null = null;
 
     if (tableData.type === 'saturated') {
+      if (!isNumeric) return;
       let minDiff = Infinity;
       let targetIndex = -1;
       const targetVal = jumpProperty === 'P'
@@ -533,6 +673,7 @@ export default function App() {
       });
       if (targetIndex !== -1) targetKey = targetIndex.toString();
     } else if (tableData.type === 'superheated' || tableData.type === 'compressed') {
+      if (!isNumeric) return;
       let targetP_MPa = val1;
       if (jumpSuperheatedUnit === 'kPa') targetP_MPa = val1 / 1000;
       else if (jumpSuperheatedUnit === 'bar') targetP_MPa = val1 / 10;
@@ -571,18 +712,171 @@ export default function App() {
         setTimeout(() => setHighlightedBlockIdx(null), 2500);
       }
       return;
-    } else if (tableData.type === 'ideal_gas_air' || tableData.type === 'ideal_gas_molar') {
+    } else if (
+      tableData.type === 'ideal_gas_air' ||
+      tableData.type === 'ideal_gas_molar' ||
+      tableData.type === 'specific_heat_temp'
+    ) {
+      if (!isNumeric) return;
+      const targetTempK = tempUnit === 'C' ? val1 + 273.15 : val1;
       let minDiff = Infinity;
       let targetIndex = -1;
       tableData.rows.forEach((row, idx) => {
         const rowVal = row.T.v;
-        const diff = Math.abs(rowVal - val1);
+        const diff = Math.abs(rowVal - targetTempK);
         if (diff < minDiff) {
           minDiff = diff;
           targetIndex = idx;
         }
       });
       if (targetIndex !== -1) targetKey = targetIndex.toString();
+    } else if (
+      tableData.type === 'critical_properties' ||
+      tableData.type === 'specific_heat_300k' ||
+      tableData.type === 'specific_heat_poly' ||
+      tableData.type === 'liquids' ||
+      tableData.type === 'solids' ||
+      tableData.type === 'foods'
+    ) {
+      const findBySubstance = () => {
+        const qNorm = normalizeChemText(rawQuery);
+        let idx = tableData.rows.findIndex((r) => {
+          const subNorm = normalizeChemText(r.substance);
+          const formNorm = 'formula' in r ? normalizeChemText(r.formula) : '';
+          return subNorm === qNorm || (formNorm && formNorm === qNorm);
+        });
+        if (idx === -1) {
+          idx = tableData.rows.findIndex((r) => {
+            const subNorm = normalizeChemText(r.substance);
+            const formNorm = 'formula' in r ? normalizeChemText(r.formula) : '';
+            return subNorm.startsWith(qNorm) || (formNorm && formNorm.startsWith(qNorm));
+          });
+        }
+        if (idx === -1) {
+          idx = tableData.rows.findIndex((r) => {
+            const subNorm = normalizeChemText(r.substance);
+            const formNorm = 'formula' in r ? normalizeChemText(r.formula) : '';
+            return subNorm.includes(qNorm) || (formNorm && formNorm.includes(qNorm));
+          });
+        }
+        return idx;
+      };
+
+      if (jumpProperty === 'substance' || !isNumeric) {
+        const foundIdx = findBySubstance();
+        if (foundIdx !== -1) {
+          targetKey = foundIdx.toString();
+        }
+      }
+
+      if (!targetKey && isNumeric) {
+        let minDiff = Infinity;
+        let targetIndex = -1;
+
+        if (tableData.type === 'critical_properties') {
+          const prop = jumpProperty === 'substance' ? 'M' : jumpProperty;
+          const targetVal =
+            prop === 'T_cr'
+              ? tempUnit === 'C'
+                ? val1 + 273.15
+                : val1
+              : prop === 'P_cr'
+              ? pressUnit === 'kPa'
+                ? val1 / 1000
+                : pressUnit === 'bar'
+                ? val1 / 10
+                : val1
+              : val1;
+
+          tableData.rows.forEach((row, idx) => {
+            const cell = row[prop as 'M' | 'R' | 'T_cr' | 'P_cr' | 'v_cr'];
+            if (cell) {
+              const diff = Math.abs(cell.v - targetVal);
+              if (diff < minDiff) {
+                minDiff = diff;
+                targetIndex = idx;
+              }
+            }
+          });
+        } else if (tableData.type === 'specific_heat_300k') {
+          const prop = jumpProperty === 'substance' ? 'cp' : jumpProperty;
+          tableData.rows.forEach((row, idx) => {
+            const cell = row[prop as 'R' | 'cp' | 'cv' | 'k'];
+            if (cell) {
+              const diff = Math.abs(cell.v - val1);
+              if (diff < minDiff) {
+                minDiff = diff;
+                targetIndex = idx;
+              }
+            }
+          });
+        } else if (tableData.type === 'specific_heat_poly') {
+          tableData.rows.forEach((row, idx) => {
+            const diff = Math.abs(row.a.v - val1);
+            if (diff < minDiff) {
+              minDiff = diff;
+              targetIndex = idx;
+            }
+          });
+        } else if (tableData.type === 'liquids') {
+          const prop = jumpProperty === 'substance' ? 'T_boil' : jumpProperty;
+          const isTempProp = prop === 'T_boil' || prop === 'T_freeze' || prop === 'T_liq';
+          const targetVal = isTempProp && tempUnit === 'K' ? val1 - 273.15 : val1;
+          tableData.rows.forEach((row, idx) => {
+            const cell = row[prop as 'T_boil' | 'T_freeze' | 'T_liq' | 'rho' | 'cp'];
+            if (cell) {
+              const diff = Math.abs(cell.v - targetVal);
+              if (diff < minDiff) {
+                minDiff = diff;
+                targetIndex = idx;
+              }
+            }
+          });
+        } else if (tableData.type === 'solids') {
+          const prop = jumpProperty === 'substance' ? 'rho' : jumpProperty;
+          tableData.rows.forEach((row, idx) => {
+            if (prop === 'T' && row.T) {
+              const rowTempInCurrentUnit =
+                row.T_nativeUnit === 'K'
+                  ? tempUnit === 'C'
+                    ? row.T.v - 273.15
+                    : row.T.v
+                  : tempUnit === 'K'
+                  ? row.T.v + 273.15
+                  : row.T.v;
+              const diff = Math.abs(rowTempInCurrentUnit - val1);
+              if (diff < minDiff) {
+                minDiff = diff;
+                targetIndex = idx;
+              }
+            } else {
+              const cell = row[prop as 'rho' | 'cp'];
+              if (cell) {
+                const diff = Math.abs(cell.v - val1);
+                if (diff < minDiff) {
+                  minDiff = diff;
+                  targetIndex = idx;
+                }
+              }
+            }
+          });
+        } else if (tableData.type === 'foods') {
+          const prop = jumpProperty === 'substance' ? 'T_freeze' : jumpProperty;
+          const targetVal = prop === 'T_freeze' && tempUnit === 'K' ? val1 - 273.15 : val1;
+          tableData.rows.forEach((row, idx) => {
+            const cell = row[prop as 'waterContent' | 'T_freeze' | 'cp_above' | 'cp_below' | 'h_if'];
+            if (cell) {
+              const diff = Math.abs(cell.v - targetVal);
+              if (diff < minDiff) {
+                minDiff = diff;
+                targetIndex = idx;
+              }
+            }
+          });
+        }
+
+        if (targetIndex !== -1) targetKey = targetIndex.toString();
+      }
     }
 
     if (targetKey && rowRefs.current[targetKey]) {
@@ -616,45 +910,53 @@ export default function App() {
     setVisibleCols(prev => ({ ...prev, [id]: !prev[id] }));
   };
 
-  const isIce = currentTableId === 'A-8';
-
   const categories = [
-    { 
-      id: 'volume', 
-      label: 'Specific Volume', 
-      unit: '(m³/kg)', 
-      cols: isIce 
-        ? [{ id: 'vi', label: 'Sat. ice, vi' }, { id: 'vg', label: 'Sat. vapor, vg' }] 
-        : [{ id: 'vf', label: 'Sat. liquid, vf' }, { id: 'vg', label: 'Sat. vapor, vg' }] 
+    {
+      id: 'volume',
+      label: 'Specific Volume',
+      unit: '(m³/kg)',
+      cols: [
+        { id: 'vf', label: 'Sat. liquid, vf' },
+        { id: 'vg', label: 'Sat. vapor, vg' },
+      ],
     },
-    { 
-      id: 'energy', 
-      label: 'Int. Energy', 
-      unit: '(kJ/kg)', 
-      cols: isIce
-        ? [{ id: 'ui', label: 'Sat. ice, ui' }, { id: 'uig', label: 'Subl., uig' }, { id: 'ug', label: 'Sat. vapor, ug' }]
-        : [{ id: 'uf', label: 'Sat. liquid, uf' }, { id: 'ufg', label: 'Evap., ufg' }, { id: 'ug', label: 'Sat. vapor, ug' }] 
+    {
+      id: 'energy',
+      label: 'Int. Energy',
+      unit: '(kJ/kg)',
+      cols: [
+        { id: 'uf', label: 'Sat. liquid, uf' },
+        { id: 'ufg', label: 'Evap., ufg' },
+        { id: 'ug', label: 'Sat. vapor, ug' },
+      ],
     },
-    { 
-      id: 'enthalpy', 
-      label: 'Enthalpy', 
-      unit: '(kJ/kg)', 
-      cols: isIce
-        ? [{ id: 'hi', label: 'Sat. ice, hi' }, { id: 'hig', label: 'Subl., hig' }, { id: 'hg', label: 'Sat. vapor, hg' }]
-        : [{ id: 'hf', label: 'Sat. liquid, hf' }, { id: 'hfg', label: 'Evap., hfg' }, { id: 'hg', label: 'Sat. vapor, hg' }] 
+    {
+      id: 'enthalpy',
+      label: 'Enthalpy',
+      unit: '(kJ/kg)',
+      cols: [
+        { id: 'hf', label: 'Sat. liquid, hf' },
+        { id: 'hfg', label: 'Evap., hfg' },
+        { id: 'hg', label: 'Sat. vapor, hg' },
+      ],
     },
-    { 
-      id: 'entropy', 
-      label: 'Entropy', 
-      unit: '(kJ/kg·K)', 
-      cols: isIce
-        ? [{ id: 'si', label: 'Sat. ice, si' }, { id: 'sig', label: 'Subl., sig' }, { id: 'sg', label: 'Sat. vapor, sg' }]
-        : [{ id: 'sf', label: 'Sat. liquid, sf' }, { id: 'sfg', label: 'Evap., sfg' }, { id: 'sg', label: 'Sat. vapor, sg' }] 
-    }
+    {
+      id: 'entropy',
+      label: 'Entropy',
+      unit: '(kJ/kg·K)',
+      cols: [
+        { id: 'sf', label: 'Sat. liquid, sf' },
+        { id: 'sfg', label: 'Evap., sfg' },
+        { id: 'sg', label: 'Sat. vapor, sg' },
+      ],
+    },
   ];
 
   const activeCategories = categories.filter(c => visibleCols[c.id]);
   const collapsedCategories = categories.filter(c => !visibleCols[c.id]);
+
+  const activeA2bGases = A2B_GAS_GROUPS.filter(g => visibleCols[`gas_${g.id}`] !== false);
+  const collapsedA2bGases = A2B_GAS_GROUPS.filter(g => visibleCols[`gas_${g.id}`] === false);
 
   const filteredTables = SUPPORTED_TABLES.filter(t => {
     const q = tableSearchQuery.toLowerCase().trim();
@@ -689,32 +991,39 @@ export default function App() {
     }
   };
 
-  const isIdealGas = tableData?.type === 'ideal_gas_air' || tableData?.type === 'ideal_gas_molar';
-
-  const renderColHeader = (id: string, label: string, unit: string, widthClass: string = "min-w-[85px]") => {
+  const renderColHeader = (
+    id: string,
+    label: string,
+    unit: string,
+    widthClass: string = 'min-w-[85px]',
+    unitType?: 'temp' | 'press',
+    rowSpan?: number
+  ) => {
     const isSelected = selectedCols.has(id);
     const isHovered = hoveredCol === id;
+    const resolvedUnitType = unitType || (id === 'T' ? 'temp' : undefined);
 
     return (
-      <th 
+      <th
+        rowSpan={rowSpan}
         data-col-id={id}
         className={cn(
-          "px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-20 select-none transition-colors h-12 sm:h-14 whitespace-nowrap cursor-pointer",
+          'px-2 py-2 text-xs font-semibold text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-20 select-none transition-colors h-12 sm:h-14 whitespace-nowrap cursor-pointer',
           widthClass,
-          isSelected 
-            ? "bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white" 
-            : (isHovered && "bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100")
+          isSelected
+            ? 'bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white'
+            : isHovered && 'bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
         )}
         onClick={() => toggleColumnHighlight(id)}
         onMouseEnter={() => handleMouseEnterCol(id)}
         onMouseLeave={handleMouseLeaveCol}
-        title={isSelected ? "Remove highlight" : `Highlight ${label} column`}
+        title={isSelected ? 'Remove highlight' : `Highlight ${label} column`}
       >
         <div className="flex flex-col justify-center h-full gap-1.5 sm:gap-2 w-full">
           <div className="flex items-center gap-1">
             <span className="font-semibold text-xs text-gray-700 dark:text-gray-200">{label}</span>
-            {id === 'T' && !isIdealGas ? (
-              <select 
+            {resolvedUnitType === 'temp' ? (
+              <select
                 className="bg-transparent border-b border-gray-300 dark:border-gray-600 text-xs font-semibold focus:outline-none cursor-pointer hover:border-red-600 dark:hover:border-red-400 text-gray-700 dark:text-gray-200 transition-colors"
                 value={tempUnit}
                 onChange={e => setTempUnit(e.target.value as TempUnit)}
@@ -723,9 +1032,20 @@ export default function App() {
                 <option value="C" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">°C</option>
                 <option value="K" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">K</option>
               </select>
-            ) : (
+            ) : resolvedUnitType === 'press' ? (
+              <select
+                className="bg-transparent border-b border-gray-300 dark:border-gray-600 text-xs font-semibold focus:outline-none cursor-pointer hover:border-red-600 dark:hover:border-red-400 text-gray-700 dark:text-gray-200 transition-colors"
+                value={pressUnit}
+                onChange={e => setPressUnit(e.target.value as PressUnit)}
+                onClick={e => e.stopPropagation()}
+              >
+                <option value="MPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">MPa</option>
+                <option value="kPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">kPa</option>
+                <option value="bar" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">bar</option>
+              </select>
+            ) : unit ? (
               <span className="text-[10px] text-gray-500 dark:text-gray-400 font-normal">({unit})</span>
-            )}
+            ) : null}
           </div>
           <div className="flex items-center justify-between w-full">
             <Info
@@ -734,16 +1054,19 @@ export default function App() {
               onMouseEnter={(e) => showTooltip(TOOLTIPS[id] || label, e)}
               onMouseLeave={hideTooltip}
             />
-            <button 
+            <button
               type="button"
-              onClick={(e) => { e.stopPropagation(); toggleColumnHighlight(id); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                toggleColumnHighlight(id);
+              }}
               className={cn(
-                "p-1 rounded transition-colors shrink-0 cursor-pointer",
-                isSelected 
-                  ? "text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40" 
-                  : "text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                'p-1 rounded transition-colors shrink-0 cursor-pointer',
+                isSelected
+                  ? 'text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40'
+                  : 'text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700'
               )}
-              title={isSelected ? "Remove highlight" : `Highlight ${label} column`}
+              title={isSelected ? 'Remove highlight' : `Highlight ${label} column`}
             >
               <Highlighter className="w-3.5 h-3.5" />
             </button>
@@ -947,12 +1270,37 @@ export default function App() {
                   <option value="bar" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">bar</option>
                 </select>
               </div>
-            ) : (
+            ) : (tableData?.type === 'ideal_gas_air' || tableData?.type === 'ideal_gas_molar' || tableData?.type === 'specific_heat_temp') ? (
               <>
                 <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
                   <input 
                     ref={jumpInputRef}
                     type="number" 
+                    step="any"
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
+                    placeholder="Temp"
+                    value={jumpValue}
+                    onChange={(e) => setJumpValue(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleJump()}
+                  />
+                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
+                </div>
+                <select 
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
+                  value={tempUnit}
+                  onChange={(e) => setTempUnit(e.target.value as TempUnit)}
+                >
+                  <option value="C" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Temp (°C)</option>
+                  <option value="K" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Temp (K)</option>
+                </select>
+              </>
+            ) : tableData?.type === 'saturated' ? (
+              <>
+                <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
+                  <input 
+                    ref={jumpInputRef}
+                    type="number" 
+                    step="any"
                     className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-28 min-w-[60px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
                     placeholder="Value"
                     value={jumpValue}
@@ -967,12 +1315,84 @@ export default function App() {
                   onChange={(e) => setJumpProperty(e.target.value)}
                 >
                   <option value="T" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-                    Temp ({isIdealGas ? 'K' : (tempUnit === 'C' ? '°C' : 'K')})
+                    Temp ({tempUnit === 'C' ? '°C' : 'K'})
                   </option>
-                  {tableData?.type === 'saturated' && (
-                    <option value="P" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
-                      Psat ({pressUnit})
-                    </option>
+                  <option value="P" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+                    Psat ({pressUnit})
+                  </option>
+                </select>
+              </>
+            ) : (
+              <>
+                <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
+                  <input 
+                    ref={jumpInputRef}
+                    type="text"
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm w-full md:w-36 min-w-[80px] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
+                    placeholder={jumpProperty === 'substance' ? 'Substance or val' : 'Value'}
+                    value={jumpValue}
+                    onChange={(e) => setJumpValue(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleJump()}
+                  />
+                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
+                </div>
+                <select 
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
+                  value={jumpProperty}
+                  onChange={(e) => setJumpProperty(e.target.value)}
+                >
+                  <option value="substance" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">
+                    Substance
+                  </option>
+                  {tableData?.type === 'critical_properties' && (
+                    <>
+                      <option value="M" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">M (kg/kmol)</option>
+                      <option value="R" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">R (kJ/kg·K)</option>
+                      <option value="T_cr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_cr ({tempUnit === 'C' ? '°C' : 'K'})</option>
+                      <option value="P_cr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">P_cr ({pressUnit})</option>
+                      <option value="v_cr" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">v_cr (m³/kmol)</option>
+                    </>
+                  )}
+                  {tableData?.type === 'specific_heat_300k' && (
+                    <>
+                      <option value="R" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">R (kJ/kg·K)</option>
+                      <option value="cp" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp (kJ/kg·K)</option>
+                      <option value="cv" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cv (kJ/kg·K)</option>
+                      <option value="k" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">k</option>
+                    </>
+                  )}
+                  {tableData?.type === 'specific_heat_poly' && (
+                    <>
+                      <option value="a" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">a</option>
+                      <option value="b" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">b × 10²</option>
+                    </>
+                  )}
+                  {tableData?.type === 'liquids' && (
+                    <>
+                      <option value="T_boil" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_boil ({tempUnit === 'C' ? '°C' : 'K'})</option>
+                      <option value="h_fg" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">h_fg (kJ/kg)</option>
+                      <option value="T_freeze" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_freeze ({tempUnit === 'C' ? '°C' : 'K'})</option>
+                      <option value="h_if" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">h_if (kJ/kg)</option>
+                      <option value="T_liq" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_liq ({tempUnit === 'C' ? '°C' : 'K'})</option>
+                      <option value="rho" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">ρ (kg/m³)</option>
+                      <option value="cp" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp (kJ/kg·K)</option>
+                    </>
+                  )}
+                  {tableData?.type === 'solids' && (
+                    <>
+                      <option value="T" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Temp ({tempUnit === 'C' ? '°C' : 'K'})</option>
+                      <option value="rho" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">ρ (kg/m³)</option>
+                      <option value="cp" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp (kJ/kg·K)</option>
+                    </>
+                  )}
+                  {tableData?.type === 'foods' && (
+                    <>
+                      <option value="waterContent" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Water (%)</option>
+                      <option value="T_freeze" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">T_freeze ({tempUnit === 'C' ? '°C' : 'K'})</option>
+                      <option value="cp_above" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp above (kJ/kg·K)</option>
+                      <option value="cp_below" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">cp below (kJ/kg·K)</option>
+                      <option value="h_if" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">h_if (kJ/kg)</option>
+                    </>
                   )}
                 </select>
               </>
@@ -1012,6 +1432,54 @@ export default function App() {
             </button>
           </div>
         </div>
+
+        {/* Sub-table switcher bar for A-2(a,b,c) and A-3(a,b,c) */}
+        {(currentTableId.startsWith('A-2') || currentTableId.startsWith('A-3')) && (
+          <div
+            className="bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-4 py-1.5 flex items-center justify-between gap-2 shrink-0 flex-wrap"
+            onMouseEnter={clearAllHover}
+          >
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-xs font-semibold text-gray-500 dark:text-gray-400 mr-1">
+                {currentTableId.startsWith('A-2') ? 'Table A-2 Parts:' : 'Table A-3 Parts:'}
+              </span>
+              {(currentTableId.startsWith('A-2')
+                ? [
+                    { id: 'A-2a', label: '(a) At 300 K' },
+                    { id: 'A-2b', label: '(b) At Various Temps' },
+                    { id: 'A-2c', label: '(c) Polynomial c̄p(T)' },
+                  ]
+                : [
+                    { id: 'A-3a', label: '(a) Liquids' },
+                    { id: 'A-3b', label: '(b) Solids' },
+                    { id: 'A-3c', label: '(c) Foods' },
+                  ]
+              ).map(part => {
+                const active = currentTableId === part.id;
+                return (
+                  <button
+                    key={part.id}
+                    type="button"
+                    onClick={() => switchTable(part.id)}
+                    className={cn(
+                      'px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer border',
+                      active
+                        ? 'bg-[#c13726] text-white border-[#a82e1f] shadow-sm'
+                        : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-700 hover:bg-red-50 dark:hover:bg-gray-700'
+                    )}
+                  >
+                    {part.label}
+                  </button>
+                );
+              })}
+            </div>
+            {currentTableId === 'A-2c' && (
+              <span className="text-xs font-mono text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 px-2.5 py-0.5 rounded border border-gray-200 dark:border-gray-700">
+                c̄p = a + bT + cT² + dT³ &nbsp;(T in K, c̄p in kJ/kmol·K)
+              </span>
+            )}
+          </div>
+        )}
 
         {/* Main Table Content */}
         <div className="flex-1 min-h-0 relative bg-white dark:bg-gray-950">
@@ -1682,13 +2150,13 @@ export default function App() {
               </div>
             )}
 
-            {/* 3. Ideal Gas Air View */}
+            {/* 3. Ideal Gas Air View (A-17) */}
             {tableData?.type === 'ideal_gas_air' && (
               <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
-                    {renderColHeader('T', 'Temp', 'K', 'min-w-[70px]')}
+                    {renderColHeader('T', 'Temp', tempUnit === 'C' ? '°C' : 'K', 'min-w-[70px]', 'temp')}
                     {renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
                     {renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
                     {renderColHeader('s_deg', 's°', 'kJ/kg·K', 'min-w-[85px]')}
@@ -1701,6 +2169,7 @@ export default function App() {
                     const isPinned = pinnedRows.has(rKey);
                     const isHighlighted = highlightedRowIndex === rKey;
                     const isHovered = hoveredRow === rKey;
+                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tempUnit === 'C' ? '°C' : 'K'}`;
                     return (
                       <tr 
                         key={idx}
@@ -1716,18 +2185,18 @@ export default function App() {
                             isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
                             isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
                           )}
-                          title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
+                          title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
                         >
                           <button 
                             type="button"
                             onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
                             className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
-                            title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
+                            title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
                           >
                             <Highlighter className="w-3.5 h-3.5" />
                           </button>
                         </td>
-                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.T.s}</Td>
+                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
                         <Td colId="h" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>
                         <Td colId="u" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>
                         <Td colId="s_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_deg'} isColSelected={selectedCols.has('s_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_deg.s}</Td>
@@ -1739,13 +2208,13 @@ export default function App() {
               </table>
             )}
 
-            {/* 4. Molar Ideal Gas View (A-18 .. A-25) */}
+            {/* 4. Molar Ideal Gas View (A-18, A-19) */}
             {tableData?.type === 'ideal_gas_molar' && (
               <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
-                    {renderColHeader('T', 'Temp', 'K', 'min-w-[70px]')}
+                    {renderColHeader('T', 'Temp', tempUnit === 'C' ? '°C' : 'K', 'min-w-[70px]', 'temp')}
                     {renderColHeader('h_bar', 'h̄', 'kJ/kmol', 'min-w-[90px]')}
                     {renderColHeader('u_bar', 'ū', 'kJ/kmol', 'min-w-[90px]')}
                     {renderColHeader('s_bar_deg', 's̄°', 'kJ/kmol·K', 'min-w-[90px]')}
@@ -1757,6 +2226,7 @@ export default function App() {
                     const isPinned = pinnedRows.has(rKey);
                     const isHighlighted = highlightedRowIndex === rKey;
                     const isHovered = hoveredRow === rKey;
+                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tempUnit === 'C' ? '°C' : 'K'}`;
                     return (
                       <tr 
                         key={idx}
@@ -1772,21 +2242,709 @@ export default function App() {
                             isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
                             isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
                           )}
-                          title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
+                          title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
                         >
                           <button 
                             type="button"
                             onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
                             className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
-                            title={isPinned ? `Unpin T = ${row.T.s}` : `Highlight T = ${row.T.s}`}
+                            title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
                           >
                             <Highlighter className="w-3.5 h-3.5" />
                           </button>
                         </td>
-                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.T.s}</Td>
+                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
                         <Td colId="h_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_bar'} isColSelected={selectedCols.has('h_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_bar.s}</Td>
                         <Td colId="u_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u_bar'} isColSelected={selectedCols.has('u_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u_bar.s}</Td>
                         <Td colId="s_bar_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_bar_deg'} isColSelected={selectedCols.has('s_bar_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_bar_deg.s}</Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* 5. Critical Properties View (Table A-1) */}
+            {tableData?.type === 'critical_properties' && (
+              <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
+                <thead>
+                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+                    {renderColHeader('substance', 'Substance', '', 'min-w-[160px]')}
+                    {renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
+                    {renderColHeader('M', 'Molar Mass, M', 'kg/kmol', 'min-w-[120px]')}
+                    {renderColHeader('R', 'Gas Const., R', 'kJ/kg·K', 'min-w-[120px]')}
+                    {renderColHeader('T_cr', 'Crit. Temp., T_cr', tempUnit === 'C' ? '°C' : 'K', 'min-w-[130px]', 'temp')}
+                    {renderColHeader('P_cr', 'Crit. Press., P_cr', pressUnit, 'min-w-[130px]', 'press')}
+                    {renderColHeader('v_cr', 'Crit. Vol., v_cr', 'm³/kmol', 'min-w-[130px]')}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.rows.map((row, idx) => {
+                    const rKey = idx.toString();
+                    const isPinned = pinnedRows.has(rKey);
+                    const isHighlighted = highlightedRowIndex === rKey;
+                    const isHovered = hoveredRow === rKey;
+                    return (
+                      <tr
+                        key={idx}
+                        data-row-key={rKey}
+                        ref={el => { rowRefs.current[rKey] = el; }}
+                        className="transition-colors bg-white dark:bg-gray-900"
+                      >
+                        <td
+                          data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
+                          className={cn(
+                            'w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
+                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
+                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20'
+                          )}
+                          title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
+                            className={cn('p-1 rounded cursor-pointer transition-colors', isPinned ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30' : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300')}
+                            title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                          >
+                            <Highlighter className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                        <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
+                        <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>
+                        <Td colId="M" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'M'} isColSelected={selectedCols.has('M')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.M.s}</Td>
+                        <Td colId="R" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'R'} isColSelected={selectedCols.has('R')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.R.s}</Td>
+                        <Td colId="T_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_cr'} isColSelected={selectedCols.has('T_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T_cr)}</Td>
+                        <Td colId="P_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'P_cr'} isColSelected={selectedCols.has('P_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatPressFromMPaDisplay(row.P_cr)}</Td>
+                        <Td colId="v_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v_cr'} isColSelected={selectedCols.has('v_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v_cr ? row.v_cr.s : '—'}</Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* 6. Specific Heats at 300 K View (Table A-2a) */}
+            {tableData?.type === 'specific_heat_300k' && (
+              <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
+                <thead>
+                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+                    {renderColHeader('substance', 'Gas', '', 'min-w-[160px]')}
+                    {renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
+                    {renderColHeader('R', 'Gas Const., R', 'kJ/kg·K', 'min-w-[120px]')}
+                    {renderColHeader('cp', 'cp', 'kJ/kg·K', 'min-w-[110px]')}
+                    {renderColHeader('cv', 'cv', 'kJ/kg·K', 'min-w-[110px]')}
+                    {renderColHeader('k', 'k', '', 'min-w-[90px]')}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.rows.map((row, idx) => {
+                    const rKey = idx.toString();
+                    const isPinned = pinnedRows.has(rKey);
+                    const isHighlighted = highlightedRowIndex === rKey;
+                    const isHovered = hoveredRow === rKey;
+                    return (
+                      <tr
+                        key={idx}
+                        data-row-key={rKey}
+                        ref={el => { rowRefs.current[rKey] = el; }}
+                        className="transition-colors bg-white dark:bg-gray-900"
+                      >
+                        <td
+                          data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
+                          className={cn(
+                            'w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
+                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
+                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20'
+                          )}
+                          title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
+                            className={cn('p-1 rounded cursor-pointer transition-colors', isPinned ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30' : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300')}
+                            title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                          >
+                            <Highlighter className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                        <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
+                        <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>
+                        <Td colId="R" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'R'} isColSelected={selectedCols.has('R')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.R.s}</Td>
+                        <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>
+                        <Td colId="cv" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cv'} isColSelected={selectedCols.has('cv')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cv.s}</Td>
+                        <Td colId="k" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'k'} isColSelected={selectedCols.has('k')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.k.s}</Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* 7. Specific Heats at Various Temperatures View (Table A-2b) */}
+            {tableData?.type === 'specific_heat_temp' && (
+              <table className="min-w-full border-collapse border-spacing-0 text-left" onMouseLeave={clearAllHover}>
+                <thead>
+                  <tr>
+                    <th rowSpan={2} className="w-10 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-40 h-14"></th>
+                    <th
+                      rowSpan={2}
+                      data-col-id="T"
+                      className={cn(
+                        'px-2 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-30 transition-colors h-14 select-none min-w-[75px] whitespace-nowrap cursor-pointer',
+                        selectedCols.has('T') ? 'bg-red-100 text-red-950 dark:bg-[#3b1d2b] dark:text-white' : hoveredCol === 'T' && 'bg-red-50 dark:bg-gray-800 text-gray-900 dark:text-gray-100'
+                      )}
+                      onClick={() => toggleColumnHighlight('T')}
+                      onMouseEnter={() => handleMouseEnterCol('T')}
+                      onMouseLeave={handleMouseLeaveCol}
+                      title={selectedCols.has('T') ? 'Remove highlight' : 'Highlight Temp column'}
+                    >
+                      <div className="flex flex-col justify-center h-full gap-2 w-full">
+                        <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                          <span className="font-semibold text-xs">Temp.</span>
+                          <select
+                            className="bg-transparent border-b border-gray-300 dark:border-gray-600 text-xs font-semibold focus:outline-none cursor-pointer hover:border-red-600 dark:hover:border-red-400 text-gray-700 dark:text-gray-200 transition-colors"
+                            value={tempUnit}
+                            onChange={e => setTempUnit(e.target.value as TempUnit)}
+                          >
+                            <option value="C" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">°C</option>
+                            <option value="K" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">K</option>
+                          </select>
+                        </div>
+                        <div className="flex items-center justify-between w-full">
+                          <Info
+                            className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 cursor-help"
+                            onClick={(e) => e.stopPropagation()}
+                            onMouseEnter={(e) => showTooltip(TOOLTIPS['T'], e)}
+                            onMouseLeave={hideTooltip}
+                          />
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleColumnHighlight('T');
+                            }}
+                            className={cn(
+                              'p-1 rounded transition-colors shrink-0 cursor-pointer',
+                              selectedCols.has('T') ? 'text-red-700 bg-red-200/90 dark:text-rose-200 dark:bg-rose-500/30 hover:bg-red-300 dark:hover:bg-rose-500/40' : 'text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                            title={selectedCols.has('T') ? 'Remove highlight' : 'Highlight Temp column'}
+                          >
+                            <Highlighter className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      </div>
+                    </th>
+
+                    {activeA2bGases.map((g) => (
+                      <th
+                        key={g.id}
+                        colSpan={3}
+                        className="px-2 py-2 text-sm font-medium text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-20 h-14 whitespace-nowrap"
+                      >
+                        <div className="flex flex-col items-center justify-center h-full gap-1">
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={true}
+                              onChange={() => toggleCol(`gas_${g.id}`)}
+                              className="rounded border-gray-300 dark:border-gray-600 text-[#c13726] dark:text-red-500 focus:ring-[#c13726] dark:focus:ring-red-500 dark:bg-gray-800 cursor-pointer"
+                            />
+                            <span className="font-semibold text-xs md:text-sm">{g.label}</span>
+                          </label>
+                        </div>
+                      </th>
+                    ))}
+
+                    <th rowSpan={2} className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 w-full" />
+
+                    {collapsedA2bGases.map((g) => (
+                      <th
+                        key={g.id}
+                        rowSpan={2}
+                        className="w-10 bg-gray-100 hover:bg-gray-200 dark:bg-gray-900 dark:hover:bg-gray-800 border-b border-gray-200 dark:border-gray-800 border-l-2 border-l-gray-300 dark:border-l-gray-700 sticky top-0 z-20 transition-colors cursor-pointer"
+                        onClick={() => toggleCol(`gas_${g.id}`)}
+                        title={`Expand ${g.label}`}
+                      >
+                        <div className="h-full flex items-center justify-center py-2">
+                          <span className="[writing-mode:vertical-rl] text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider select-none">
+                            {g.label}
+                          </span>
+                        </div>
+                      </th>
+                    ))}
+                  </tr>
+
+                  <tr>
+                    {activeA2bGases.map((g) => {
+                      const subCols = [
+                        { id: `${g.id}_cp`, label: 'cp (kJ/kg·K)', prop: 'cp' },
+                        { id: `${g.id}_cv`, label: 'cv (kJ/kg·K)', prop: 'cv' },
+                        { id: `${g.id}_k`, label: 'k', prop: 'k' },
+                      ];
+                      return subCols.map((sc, sIdx) => (
+                        <SubHeader
+                          key={sc.id}
+                          label={sc.label}
+                          prop={sc.prop}
+                          colId={sc.id}
+                          isCategoryEnd={sIdx === 2}
+                          isHovered={hoveredCol === sc.id}
+                          isSelected={selectedCols.has(sc.id)}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                        />
+                      ));
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.rows.map((row, idx) => {
+                    const rKey = idx.toString();
+                    const isPinned = pinnedRows.has(rKey);
+                    const isHighlighted = highlightedRowIndex === rKey;
+                    const isHovered = hoveredRow === rKey;
+                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tempUnit === 'C' ? '°C' : 'K'}`;
+                    return (
+                      <tr
+                        key={idx}
+                        data-row-key={rKey}
+                        ref={el => { rowRefs.current[rKey] = el; }}
+                        className="transition-colors bg-white dark:bg-gray-900"
+                      >
+                        <td
+                          data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
+                          className={cn(
+                            'px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
+                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
+                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20'
+                          )}
+                          title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
+                            className={cn(
+                              'p-1.5 rounded transition-colors cursor-pointer',
+                              isPinned
+                                ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30 shadow-sm'
+                                : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                            title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
+                          >
+                            <Highlighter className="w-4 h-4" />
+                          </button>
+                        </td>
+
+                        <Td
+                          colId="T"
+                          isRowHovered={isHovered}
+                          isPinned={isPinned}
+                          isHighlighted={isHighlighted}
+                          isCategoryEnd={true}
+                          isColHovered={hoveredCol === 'T'}
+                          isColSelected={selectedCols.has('T')}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                        >
+                          {formatTempFromKDisplay(row.T)}
+                        </Td>
+
+                        {activeA2bGases.map((g) => {
+                          const triplet = row[g.id];
+                          const subCols: { id: string; val: ThermoValue }[] = [
+                            { id: `${g.id}_cp`, val: triplet.cp },
+                            { id: `${g.id}_cv`, val: triplet.cv },
+                            { id: `${g.id}_k`, val: triplet.k },
+                          ];
+                          return subCols.map((sc, sIdx) => (
+                            <Td
+                              key={sc.id}
+                              colId={sc.id}
+                              isRowHovered={isHovered}
+                              isPinned={isPinned}
+                              isHighlighted={isHighlighted}
+                              isCategoryEnd={sIdx === 2}
+                              isColHovered={hoveredCol === sc.id}
+                              isColSelected={selectedCols.has(sc.id)}
+                              onMouseEnterCol={handleMouseEnterCol}
+                              onMouseLeaveCol={handleMouseLeaveCol}
+                            >
+                              {sc.val ? sc.val.s : '—'}
+                            </Td>
+                          ));
+                        })}
+
+                        <td className="bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-0" />
+
+                        {idx === 0 &&
+                          collapsedA2bGases.map((g) => (
+                            <td
+                              key={g.id}
+                              rowSpan={tableData.rows.length}
+                              className="bg-gray-50 dark:bg-gray-900 border-l-2 border-l-gray-300 dark:border-l-gray-700 border-b-0 p-0"
+                            />
+                          ))}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* 8. Polynomial Specific Heats View (Table A-2c) */}
+            {tableData?.type === 'specific_heat_poly' && (
+              <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
+                <thead>
+                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+                    {renderColHeader('substance', 'Substance', '', 'min-w-[160px]')}
+                    {renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
+                    {renderColHeader('a', 'a', '', 'min-w-[90px]')}
+                    {renderColHeader('b', 'b × 10²', '', 'min-w-[100px]')}
+                    {renderColHeader('c', 'c × 10⁵', '', 'min-w-[100px]')}
+                    {renderColHeader('d', 'd × 10⁹', '', 'min-w-[100px]')}
+                    {renderColHeader('tempRange', 'Temp. Range', tempUnit === 'C' ? '°C' : 'K', 'min-w-[140px]', 'temp')}
+                    {renderColHeader('errorMax', 'Max. Error', '%', 'min-w-[100px]')}
+                    {renderColHeader('errorAvg', 'Avg. Error', '%', 'min-w-[100px]')}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.rows.map((row, idx) => {
+                    const rKey = idx.toString();
+                    const isPinned = pinnedRows.has(rKey);
+                    const isHighlighted = highlightedRowIndex === rKey;
+                    const isHovered = hoveredRow === rKey;
+                    return (
+                      <tr
+                        key={idx}
+                        data-row-key={rKey}
+                        ref={el => { rowRefs.current[rKey] = el; }}
+                        className="transition-colors bg-white dark:bg-gray-900"
+                      >
+                        <td
+                          data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
+                          className={cn(
+                            'w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
+                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
+                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20'
+                          )}
+                          title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
+                            className={cn('p-1 rounded cursor-pointer transition-colors', isPinned ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30' : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300')}
+                            title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                          >
+                            <Highlighter className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                        <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
+                        <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>
+                        <Td colId="a" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'a'} isColSelected={selectedCols.has('a')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.a.s}</Td>
+                        <Td colId="b" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'b'} isColSelected={selectedCols.has('b')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.b.s}</Td>
+                        <Td colId="c" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'c'} isColSelected={selectedCols.has('c')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.c.s}</Td>
+                        <Td colId="d" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'd'} isColSelected={selectedCols.has('d')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.d.s}</Td>
+                        <Td colId="tempRange" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'tempRange'} isColSelected={selectedCols.has('tempRange')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{`${formatTempFromKDisplay(row.T_min)}–${formatTempFromKDisplay(row.T_max)}`}</Td>
+                        <Td colId="errorMax" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'errorMax'} isColSelected={selectedCols.has('errorMax')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.errorMax.s}</Td>
+                        <Td colId="errorAvg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'errorAvg'} isColSelected={selectedCols.has('errorAvg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.errorAvg.s}</Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* 9. Properties of Common Liquids View (Table A-3a) */}
+            {tableData?.type === 'liquids' && (
+              <table className="min-w-full border-collapse border-spacing-0 text-left" onMouseLeave={clearAllHover}>
+                <thead>
+                  <tr>
+                    <th rowSpan={2} className="w-10 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-40 h-14"></th>
+                    {renderColHeader('substance', 'Substance', '', 'min-w-[160px] border-r-2 border-r-gray-300 dark:border-r-gray-700', undefined, 2)}
+                    <th colSpan={2} className="px-2 py-2 text-xs md:text-sm font-semibold text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-20 h-12">
+                      Boiling Data at 1 atm
+                    </th>
+                    <th colSpan={2} className="px-2 py-2 text-xs md:text-sm font-semibold text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-20 h-12">
+                      Freezing Data
+                    </th>
+                    <th colSpan={3} className="px-2 py-2 text-xs md:text-sm font-semibold text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-20 h-12">
+                      Liquid Properties
+                    </th>
+                  </tr>
+                  <tr>
+                    <SubHeader
+                      label="Normal Boiling Point"
+                      prop="T_boil"
+                      colId="T_boil"
+                      isCategoryEnd={false}
+                      isHovered={hoveredCol === 'T_boil'}
+                      isSelected={selectedCols.has('T_boil')}
+                      onToggleHighlight={toggleColumnHighlight}
+                      onMouseEnterCol={handleMouseEnterCol}
+                      onMouseLeaveCol={handleMouseLeaveCol}
+                      onShowTooltip={showTooltip}
+                      onHideTooltip={hideTooltip}
+                      unitType="temp"
+                      tempUnit={tempUnit}
+                      onChangeTempUnit={setTempUnit}
+                    />
+                    <SubHeader
+                      label="h_fg (kJ/kg)"
+                      prop="h_fg"
+                      colId="h_fg"
+                      isCategoryEnd={true}
+                      isHovered={hoveredCol === 'h_fg'}
+                      isSelected={selectedCols.has('h_fg')}
+                      onToggleHighlight={toggleColumnHighlight}
+                      onMouseEnterCol={handleMouseEnterCol}
+                      onMouseLeaveCol={handleMouseLeaveCol}
+                      onShowTooltip={showTooltip}
+                      onHideTooltip={hideTooltip}
+                    />
+                    <SubHeader
+                      label="Freezing Point"
+                      prop="T_freeze"
+                      colId="T_freeze"
+                      isCategoryEnd={false}
+                      isHovered={hoveredCol === 'T_freeze'}
+                      isSelected={selectedCols.has('T_freeze')}
+                      onToggleHighlight={toggleColumnHighlight}
+                      onMouseEnterCol={handleMouseEnterCol}
+                      onMouseLeaveCol={handleMouseLeaveCol}
+                      onShowTooltip={showTooltip}
+                      onHideTooltip={hideTooltip}
+                      unitType="temp"
+                      tempUnit={tempUnit}
+                      onChangeTempUnit={setTempUnit}
+                    />
+                    <SubHeader
+                      label="h_if (kJ/kg)"
+                      prop="h_if"
+                      colId="h_if"
+                      isCategoryEnd={true}
+                      isHovered={hoveredCol === 'h_if'}
+                      isSelected={selectedCols.has('h_if')}
+                      onToggleHighlight={toggleColumnHighlight}
+                      onMouseEnterCol={handleMouseEnterCol}
+                      onMouseLeaveCol={handleMouseLeaveCol}
+                      onShowTooltip={showTooltip}
+                      onHideTooltip={hideTooltip}
+                    />
+                    <SubHeader
+                      label="Temp."
+                      prop="T_liq"
+                      colId="T_liq"
+                      isCategoryEnd={false}
+                      isHovered={hoveredCol === 'T_liq'}
+                      isSelected={selectedCols.has('T_liq')}
+                      onToggleHighlight={toggleColumnHighlight}
+                      onMouseEnterCol={handleMouseEnterCol}
+                      onMouseLeaveCol={handleMouseLeaveCol}
+                      onShowTooltip={showTooltip}
+                      onHideTooltip={hideTooltip}
+                      unitType="temp"
+                      tempUnit={tempUnit}
+                      onChangeTempUnit={setTempUnit}
+                    />
+                    <SubHeader
+                      label="Density, ρ (kg/m³)"
+                      prop="rho"
+                      colId="rho"
+                      isCategoryEnd={false}
+                      isHovered={hoveredCol === 'rho'}
+                      isSelected={selectedCols.has('rho')}
+                      onToggleHighlight={toggleColumnHighlight}
+                      onMouseEnterCol={handleMouseEnterCol}
+                      onMouseLeaveCol={handleMouseLeaveCol}
+                      onShowTooltip={showTooltip}
+                      onHideTooltip={hideTooltip}
+                    />
+                    <SubHeader
+                      label="cp (kJ/kg·K)"
+                      prop="cp"
+                      colId="cp"
+                      isCategoryEnd={false}
+                      isHovered={hoveredCol === 'cp'}
+                      isSelected={selectedCols.has('cp')}
+                      onToggleHighlight={toggleColumnHighlight}
+                      onMouseEnterCol={handleMouseEnterCol}
+                      onMouseLeaveCol={handleMouseLeaveCol}
+                      onShowTooltip={showTooltip}
+                      onHideTooltip={hideTooltip}
+                    />
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.rows.map((row, idx) => {
+                    const rKey = idx.toString();
+                    const isPinned = pinnedRows.has(rKey);
+                    const isHighlighted = highlightedRowIndex === rKey;
+                    const isHovered = hoveredRow === rKey;
+                    return (
+                      <tr
+                        key={idx}
+                        data-row-key={rKey}
+                        ref={el => { rowRefs.current[rKey] = el; }}
+                        className="transition-colors bg-white dark:bg-gray-900"
+                      >
+                        <td
+                          data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
+                          className={cn(
+                            'px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
+                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
+                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20'
+                          )}
+                          title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
+                            className={cn(
+                              'p-1.5 rounded transition-colors cursor-pointer',
+                              isPinned
+                                ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30 shadow-sm'
+                                : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
+                            )}
+                            title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                          >
+                            <Highlighter className="w-4 h-4" />
+                          </button>
+                        </td>
+                        <Td colId="substance" align="left" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
+                        <Td colId="T_boil" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_boil'} isColSelected={selectedCols.has('T_boil')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatLiquidBoilTemp(row)}</Td>
+                        <Td colId="h_fg" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_fg'} isColSelected={selectedCols.has('h_fg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatLiquidHfg(row)}</Td>
+                        <Td colId="T_freeze" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_freeze'} isColSelected={selectedCols.has('T_freeze')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.T_freeze ? formatTempDisplay(row.T_freeze) : '—'}</Td>
+                        <Td colId="h_if" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_if'} isColSelected={selectedCols.has('h_if')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_if ? row.h_if.s : '—'}</Td>
+                        <Td colId="T_liq" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_liq'} isColSelected={selectedCols.has('T_liq')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempDisplay(row.T_liq)}</Td>
+                        <Td colId="rho" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'rho'} isColSelected={selectedCols.has('rho')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.rho.s}</Td>
+                        <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* 10. Properties of Common Solids View (Table A-3b) */}
+            {tableData?.type === 'solids' && (
+              <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
+                <thead>
+                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+                    {renderColHeader('category', 'Category', '', 'min-w-[110px]')}
+                    {renderColHeader('substance', 'Substance', '', 'min-w-[200px]')}
+                    {renderColHeader('T', 'Temp.', tempUnit === 'C' ? '°C' : 'K', 'min-w-[110px]', 'temp')}
+                    {renderColHeader('rho', 'Density, ρ', 'kg/m³', 'min-w-[120px]')}
+                    {renderColHeader('cp', 'Specific Heat, cp', 'kJ/kg·K', 'min-w-[130px]')}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.rows.map((row, idx) => {
+                    const rKey = idx.toString();
+                    const isPinned = pinnedRows.has(rKey);
+                    const isHighlighted = highlightedRowIndex === rKey;
+                    const isHovered = hoveredRow === rKey;
+                    return (
+                      <tr
+                        key={idx}
+                        data-row-key={rKey}
+                        ref={el => { rowRefs.current[rKey] = el; }}
+                        className="transition-colors bg-white dark:bg-gray-900"
+                      >
+                        <td
+                          data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
+                          className={cn(
+                            'w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
+                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
+                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20'
+                          )}
+                          title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
+                            className={cn('p-1 rounded cursor-pointer transition-colors', isPinned ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30' : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300')}
+                            title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                          >
+                            <Highlighter className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                        <Td colId="category" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'category'} isColSelected={selectedCols.has('category')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.category}</Td>
+                        <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
+                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatSolidTemp(row)}</Td>
+                        <Td colId="rho" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'rho'} isColSelected={selectedCols.has('rho')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.rho ? row.rho.s : '—'}</Td>
+                        <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+
+            {/* 11. Properties of Common Foods View (Table A-3c) */}
+            {tableData?.type === 'foods' && (
+              <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
+                <thead>
+                  <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+                    {renderColHeader('substance', 'Food', '', 'min-w-[160px]')}
+                    {renderColHeader('waterContent', 'Water Content', '% (mass)', 'min-w-[120px]')}
+                    {renderColHeader('T_freeze', 'Freezing Point', tempUnit === 'C' ? '°C' : 'K', 'min-w-[130px]', 'temp')}
+                    {renderColHeader('cp_above', 'cp Above Freezing', 'kJ/kg·K', 'min-w-[140px]')}
+                    {renderColHeader('cp_below', 'cp Below Freezing', 'kJ/kg·K', 'min-w-[140px]')}
+                    {renderColHeader('h_if', 'Latent Heat of Fusion, h_if', 'kJ/kg', 'min-w-[160px]')}
+                  </tr>
+                </thead>
+                <tbody>
+                  {tableData.rows.map((row, idx) => {
+                    const rKey = idx.toString();
+                    const isPinned = pinnedRows.has(rKey);
+                    const isHighlighted = highlightedRowIndex === rKey;
+                    const isHovered = hoveredRow === rKey;
+                    return (
+                      <tr
+                        key={idx}
+                        data-row-key={rKey}
+                        ref={el => { rowRefs.current[rKey] = el; }}
+                        className="transition-colors bg-white dark:bg-gray-900"
+                      >
+                        <td
+                          data-pin-cell="true"
+                          onClick={() => togglePin(rKey)}
+                          className={cn(
+                            'w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
+                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
+                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20'
+                          )}
+                          title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                        >
+                          <button
+                            type="button"
+                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
+                            className={cn('p-1 rounded cursor-pointer transition-colors', isPinned ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30' : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300')}
+                            title={isPinned ? `Unpin ${row.substance}` : `Highlight ${row.substance}`}
+                          >
+                            <Highlighter className="w-3.5 h-3.5" />
+                          </button>
+                        </td>
+                        <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
+                        <Td colId="waterContent" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'waterContent'} isColSelected={selectedCols.has('waterContent')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.waterContent.s}</Td>
+                        <Td colId="T_freeze" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_freeze'} isColSelected={selectedCols.has('T_freeze')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempDisplay(row.T_freeze)}</Td>
+                        <Td colId="cp_above" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp_above'} isColSelected={selectedCols.has('cp_above')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp_above ? row.cp_above.s : '—'}</Td>
+                        <Td colId="cp_below" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp_below'} isColSelected={selectedCols.has('cp_below')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp_below.s}</Td>
+                        <Td colId="h_if" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_if'} isColSelected={selectedCols.has('h_if')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_if.s}</Td>
                       </tr>
                     );
                   })}

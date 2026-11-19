@@ -21,6 +21,8 @@ import type {
   ThermoValue,
   IdealGasAirRow,
   IdealGasMolarRow,
+  LiquidPropertiesRow,
+  SolidPropertiesRow,
 } from '../data/types';
 import {
   renderSnippetCanvas,
@@ -50,8 +52,17 @@ interface SnippetModalProps {
   onClearAllSelections: () => void;
 }
 
+const A2B_GASES = [
+  { id: 'air', short: 'Air', label: 'Air' },
+  { id: 'co2', short: 'CO₂', label: 'Carbon dioxide, CO₂' },
+  { id: 'co', short: 'CO', label: 'Carbon monoxide, CO' },
+  { id: 'h2', short: 'H₂', label: 'Hydrogen, H₂' },
+  { id: 'n2', short: 'N₂', label: 'Nitrogen, N₂' },
+  { id: 'o2', short: 'O₂', label: 'Oxygen, O₂' },
+] as const;
+
 function buildAllColumns(
-  tableMeta: TableMeta,
+  _tableMeta: TableMeta,
   tableData: ThermoTableData | null | undefined,
   tempUnit: TempUnit,
   pressUnit: PressUnit,
@@ -59,8 +70,103 @@ function buildAllColumns(
 ): SnippetColumnDef[] {
   if (!tableData) return [];
 
+  if (tableData.type === 'critical_properties') {
+    return [
+      { id: 'substance', symbol: 'Substance', unit: '', label: 'Substance', isIndex: true },
+      { id: 'formula', symbol: 'Formula', unit: '', label: 'Formula' },
+      { id: 'M', symbol: 'M', unit: 'kg/kmol', label: 'M' },
+      { id: 'R', symbol: 'R', unit: 'kJ/kg · K', label: 'R' },
+      { id: 'T_cr', symbol: 'T', subscript: 'cr', unit: tempUnit === 'K' ? 'K' : '°C', label: 'Tcr' },
+      { id: 'P_cr', symbol: 'P', subscript: 'cr', unit: pressUnit, label: 'Pcr' },
+      { id: 'v_cr', symbol: 'v', subscript: 'cr', unit: 'm³/kmol', label: 'vcr' },
+    ];
+  }
+
+  if (tableData.type === 'specific_heat_300k') {
+    return [
+      { id: 'substance', symbol: 'Gas', unit: '', label: 'Gas', isIndex: true },
+      { id: 'formula', symbol: 'Formula', unit: '', label: 'Formula' },
+      { id: 'R', symbol: 'R', unit: 'kJ/kg · K', label: 'R' },
+      { id: 'cp', symbol: 'c', subscript: 'p', unit: 'kJ/kg · K', label: 'cp' },
+      { id: 'cv', symbol: 'c', subscript: 'v', unit: 'kJ/kg · K', label: 'cv' },
+      { id: 'k', symbol: 'k', unit: '', label: 'k' },
+    ];
+  }
+
+  if (tableData.type === 'specific_heat_temp') {
+    const cols: SnippetColumnDef[] = [
+      {
+        id: 'T',
+        symbol: 'T',
+        unit: tempUnit === 'K' ? 'K' : '°C',
+        label: 'Temp',
+        isIndex: true,
+      },
+    ];
+    for (const g of A2B_GASES) {
+      if (visibleCols[`gas_${g.id}`] !== false) {
+        cols.push(
+          { id: `${g.id}_cp`, symbol: 'c', subscript: `p,${g.short}`, unit: 'kJ/kg · K', label: `${g.short} cp` },
+          { id: `${g.id}_cv`, symbol: 'c', subscript: `v,${g.short}`, unit: 'kJ/kg · K', label: `${g.short} cv` },
+          { id: `${g.id}_k`, symbol: 'k', subscript: g.short, unit: '', label: `${g.short} k` }
+        );
+      }
+    }
+    return cols;
+  }
+
+  if (tableData.type === 'specific_heat_poly') {
+    return [
+      { id: 'substance', symbol: 'Substance', unit: '', label: 'Substance', isIndex: true },
+      { id: 'formula', symbol: 'Formula', unit: '', label: 'Formula' },
+      { id: 'a', symbol: 'a', unit: '', label: 'a' },
+      { id: 'b', symbol: 'b', unit: '', label: 'b' },
+      { id: 'c', symbol: 'c', unit: '', label: 'c' },
+      { id: 'd', symbol: 'd', unit: '', label: 'd' },
+      { id: 'tempRange', symbol: 'T', subscript: 'range', unit: tempUnit === 'K' ? 'K' : '°C', label: 'Temp Range' },
+      { id: 'errorMax', symbol: 'Err', subscript: 'max', unit: '%', label: 'Max % Err' },
+      { id: 'errorAvg', symbol: 'Err', subscript: 'avg', unit: '%', label: 'Avg % Err' },
+    ];
+  }
+
+  if (tableData.type === 'liquids') {
+    const tUnit = tempUnit === 'K' ? 'K' : '°C';
+    return [
+      { id: 'substance', symbol: 'Substance', unit: '', label: 'Substance', isIndex: true },
+      { id: 'T_boil', symbol: 'T', subscript: 'b', unit: tUnit, label: 'Boiling Pt' },
+      { id: 'h_fg', symbol: 'h', subscript: 'fg', unit: 'kJ/kg', label: 'hfg' },
+      { id: 'T_freeze', symbol: 'T', subscript: 'f', unit: tUnit, label: 'Freezing Pt' },
+      { id: 'h_if', symbol: 'h', subscript: 'if', unit: 'kJ/kg', label: 'hif' },
+      { id: 'T_liq', symbol: 'T', unit: tUnit, label: 'Liquid Temp' },
+      { id: 'rho', symbol: 'ρ', unit: 'kg/m³', label: 'ρ' },
+      { id: 'cp', symbol: 'c', subscript: 'p', unit: 'kJ/kg · K', label: 'cp' },
+    ];
+  }
+
+  if (tableData.type === 'solids') {
+    const tUnit = tempUnit === 'K' ? 'K' : '°C';
+    return [
+      { id: 'substance', symbol: 'Substance', unit: '', label: 'Substance', isIndex: true },
+      { id: 'category', symbol: 'Category', unit: '', label: 'Category' },
+      { id: 'T', symbol: 'T', unit: tUnit, label: 'Temp' },
+      { id: 'rho', symbol: 'ρ', unit: 'kg/m³', label: 'ρ' },
+      { id: 'cp', symbol: 'c', subscript: 'p', unit: 'kJ/kg · K', label: 'cp' },
+    ];
+  }
+
+  if (tableData.type === 'foods') {
+    const tUnit = tempUnit === 'K' ? 'K' : '°C';
+    return [
+      { id: 'substance', symbol: 'Food', unit: '', label: 'Food', isIndex: true },
+      { id: 'waterContent', symbol: 'Water', unit: '%', label: 'Water %' },
+      { id: 'T_freeze', symbol: 'T', subscript: 'f', unit: tUnit, label: 'Freezing Pt' },
+      { id: 'cp_above', symbol: 'c', subscript: 'p,above', unit: 'kJ/kg · K', label: 'cp (above)' },
+      { id: 'cp_below', symbol: 'c', subscript: 'p,below', unit: 'kJ/kg · K', label: 'cp (below)' },
+      { id: 'h_if', symbol: 'h', subscript: 'if', unit: 'kJ/kg', label: 'Latent Heat' },
+    ];
+  }
+
   if (tableData.type === 'saturated') {
-    const isIce = tableMeta.id === 'A-8';
     const tCol: SnippetColumnDef = {
       id: 'T',
       symbol: 'T',
@@ -83,42 +189,28 @@ function buildAllColumns(
 
     if (visibleCols.volume) {
       cols.push(
-        isIce
-          ? { id: 'vi', symbol: 'v', subscript: 'i', unit: 'm³/kg', label: 'vi' }
-          : { id: 'vf', symbol: 'v', subscript: 'f', unit: 'm³/kg', label: 'vf' },
+        { id: 'vf', symbol: 'v', subscript: 'f', unit: 'm³/kg', label: 'vf' },
         { id: 'vg', symbol: 'v', subscript: 'g', unit: 'm³/kg', label: 'vg' }
       );
     }
     if (visibleCols.energy) {
       cols.push(
-        isIce
-          ? { id: 'ui', symbol: 'u', subscript: 'i', unit: 'kJ/kg', label: 'ui' }
-          : { id: 'uf', symbol: 'u', subscript: 'f', unit: 'kJ/kg', label: 'uf' },
-        isIce
-          ? { id: 'uig', symbol: 'u', subscript: 'ig', unit: 'kJ/kg', label: 'uig' }
-          : { id: 'ufg', symbol: 'u', subscript: 'fg', unit: 'kJ/kg', label: 'ufg' },
+        { id: 'uf', symbol: 'u', subscript: 'f', unit: 'kJ/kg', label: 'uf' },
+        { id: 'ufg', symbol: 'u', subscript: 'fg', unit: 'kJ/kg', label: 'ufg' },
         { id: 'ug', symbol: 'u', subscript: 'g', unit: 'kJ/kg', label: 'ug' }
       );
     }
     if (visibleCols.enthalpy) {
       cols.push(
-        isIce
-          ? { id: 'hi', symbol: 'h', subscript: 'i', unit: 'kJ/kg', label: 'hi' }
-          : { id: 'hf', symbol: 'h', subscript: 'f', unit: 'kJ/kg', label: 'hf' },
-        isIce
-          ? { id: 'hig', symbol: 'h', subscript: 'ig', unit: 'kJ/kg', label: 'hig' }
-          : { id: 'hfg', symbol: 'h', subscript: 'fg', unit: 'kJ/kg', label: 'hfg' },
+        { id: 'hf', symbol: 'h', subscript: 'f', unit: 'kJ/kg', label: 'hf' },
+        { id: 'hfg', symbol: 'h', subscript: 'fg', unit: 'kJ/kg', label: 'hfg' },
         { id: 'hg', symbol: 'h', subscript: 'g', unit: 'kJ/kg', label: 'hg' }
       );
     }
     if (visibleCols.entropy) {
       cols.push(
-        isIce
-          ? { id: 'si', symbol: 's', subscript: 'i', unit: 'kJ/kg · K', label: 'si' }
-          : { id: 'sf', symbol: 's', subscript: 'f', unit: 'kJ/kg · K', label: 'sf' },
-        isIce
-          ? { id: 'sig', symbol: 's', subscript: 'ig', unit: 'kJ/kg · K', label: 'sig' }
-          : { id: 'sfg', symbol: 's', subscript: 'fg', unit: 'kJ/kg · K', label: 'sfg' },
+        { id: 'sf', symbol: 's', subscript: 'f', unit: 'kJ/kg · K', label: 'sf' },
+        { id: 'sfg', symbol: 's', subscript: 'fg', unit: 'kJ/kg · K', label: 'sfg' },
         { id: 'sg', symbol: 's', subscript: 'g', unit: 'kJ/kg · K', label: 'sg' }
       );
     }
@@ -143,7 +235,7 @@ function buildAllColumns(
 
   if (tableData.type === 'ideal_gas_air') {
     return [
-      { id: 'T', symbol: 'T', unit: 'K', label: 'T', isIndex: true },
+      { id: 'T', symbol: 'T', unit: tempUnit === 'K' ? 'K' : '°C', label: 'T', isIndex: true },
       { id: 'h', symbol: 'h', unit: 'kJ/kg', label: 'h' },
       { id: 'u', symbol: 'u', unit: 'kJ/kg', label: 'u' },
       { id: 's_deg', symbol: 's', superscript: '°', unit: 'kJ/kg · K', label: 's°' },
@@ -153,7 +245,7 @@ function buildAllColumns(
 
   if (tableData.type === 'ideal_gas_molar') {
     return [
-      { id: 'T', symbol: 'T', unit: 'K', label: 'T', isIndex: true },
+      { id: 'T', symbol: 'T', unit: tempUnit === 'K' ? 'K' : '°C', label: 'T', isIndex: true },
       { id: 'h_bar', symbol: 'h', overbar: true, unit: 'kJ/kmol', label: 'h̄' },
       { id: 'u_bar', symbol: 'u', overbar: true, unit: 'kJ/kmol', label: 'ū' },
       {
@@ -210,7 +302,9 @@ function buildRowGroups({
   activeBlockIdxs,
   allColumns,
   formatTempDisplay,
+  formatTempFromKDisplay,
   formatPressDisplay,
+  formatPressFromMPaDisplay,
   formatIsobarPress,
   formatSatTemp,
 }: {
@@ -220,11 +314,234 @@ function buildRowGroups({
   activeBlockIdxs: Set<number>;
   allColumns: SnippetColumnDef[];
   formatTempDisplay: (val?: ThermoValue) => string;
+  formatTempFromKDisplay: (val?: ThermoValue) => string;
   formatPressDisplay: (val?: ThermoValue) => string;
+  formatPressFromMPaDisplay: (val?: ThermoValue) => string;
   formatIsobarPress: (val: ThermoValue) => string;
   formatSatTemp: (val?: ThermoValue) => string;
 }): SnippetRowGroup[] {
   if (!tableData) return [];
+
+  if (tableData.type === 'critical_properties') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              substance: row.substance,
+              formula: row.formula,
+              M: row.M.s,
+              R: row.R.s,
+              T_cr: formatTempFromKDisplay(row.T_cr),
+              P_cr: formatPressFromMPaDisplay(row.P_cr),
+              v_cr: row.v_cr.s,
+            },
+          };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'specific_heat_300k') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              substance: row.substance,
+              formula: row.formula,
+              R: row.R.s,
+              cp: row.cp.s,
+              cv: row.cv.s,
+              k: row.k.s,
+            },
+          };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'specific_heat_temp') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          const cells: Record<string, string> = {
+            T: formatTempFromKDisplay(row.T),
+          };
+          for (const g of A2B_GASES) {
+            const triplet = row[g.id];
+            cells[`${g.id}_cp`] = triplet.cp.s;
+            cells[`${g.id}_cv`] = triplet.cv.s;
+            cells[`${g.id}_k`] = triplet.k.s;
+          }
+          return {
+            rowKey: idx.toString(),
+            cells,
+          };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'specific_heat_poly') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              substance: row.substance,
+              formula: row.formula,
+              a: row.a.s,
+              b: row.b.s,
+              c: row.c.s,
+              d: row.d.s,
+              tempRange: `${formatTempFromKDisplay(row.T_min)}–${formatTempFromKDisplay(row.T_max)}`,
+              errorMax: row.errorMax.s,
+              errorAvg: row.errorAvg.s,
+            },
+          };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'liquids') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    const formatBoil = (r: LiquidPropertiesRow) => {
+      if (!r.T_boil) return '—';
+      const base = formatTempDisplay(r.T_boil);
+      if (r.T_boil_max) return `${base}–${formatTempDisplay(r.T_boil_max)}${r.T_boil_note || ''}`;
+      return `${base}${r.T_boil_note || ''}`;
+    };
+
+    const formatHfg = (r: LiquidPropertiesRow) => {
+      if (!r.h_fg) return '—';
+      if (r.h_fg_max) return `${r.h_fg.s}–${r.h_fg_max.s}${r.h_fg_note || ''}`;
+      return `${r.h_fg.s}${r.h_fg_note || ''}`;
+    };
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              substance: row.substance,
+              T_boil: formatBoil(row),
+              h_fg: formatHfg(row),
+              T_freeze: row.T_freeze ? formatTempDisplay(row.T_freeze) : '—',
+              h_if: row.h_if ? row.h_if.s : '—',
+              T_liq: formatTempDisplay(row.T_liq),
+              rho: row.rho.s,
+              cp: row.cp.s,
+            },
+          };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'solids') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    const formatSolidTemp = (r: SolidPropertiesRow) => {
+      if (!r.T) return '—';
+      return r.T_nativeUnit === 'K' ? formatTempFromKDisplay(r.T) : formatTempDisplay(r.T);
+    };
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              substance: row.substance,
+              category: row.category,
+              T: formatSolidTemp(row),
+              rho: row.rho ? row.rho.s : '—',
+              cp: row.cp.s,
+            },
+          };
+        }),
+      },
+    ];
+  }
+
+  if (tableData.type === 'foods') {
+    const sortedRowIndices = Array.from(pinnedRows)
+      .map((k) => parseInt(k, 10))
+      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
+      .sort((a, b) => a - b);
+
+    if (sortedRowIndices.length === 0) return [];
+
+    return [
+      {
+        rows: sortedRowIndices.map((idx) => {
+          const row = tableData.rows[idx];
+          return {
+            rowKey: idx.toString(),
+            cells: {
+              substance: row.substance,
+              waterContent: row.waterContent.s,
+              T_freeze: row.T_freeze ? formatTempDisplay(row.T_freeze) : '—',
+              cp_above: row.cp_above ? row.cp_above.s : '—',
+              cp_below: row.cp_below.s,
+              h_if: row.h_if.s,
+            },
+          };
+        }),
+      },
+    ];
+  }
 
   if (tableData.type === 'saturated') {
     const sortedRowIndices = Array.from(pinnedRows)
@@ -317,7 +634,7 @@ function buildRowGroups({
           return {
             rowKey: idx.toString(),
             cells: {
-              T: row.T.s,
+              T: formatTempFromKDisplay(row.T),
               h: row.h.s,
               u: row.u.s,
               s_deg: row.s_deg.s,
@@ -344,7 +661,7 @@ function buildRowGroups({
           return {
             rowKey: idx.toString(),
             cells: {
-              T: row.T.s,
+              T: formatTempFromKDisplay(row.T),
               h_bar: row.h_bar.s,
               u_bar: row.u_bar.s,
               s_bar_deg: row.s_bar_deg.s,
@@ -414,8 +731,30 @@ function getRowBadgeLabel(
       return `P = ${row.cells.P} ${pressUnit}${row.cells.T ? ` (${row.cells.T} ${tUnit})` : ''}`;
     }
   }
-  if (tableData.type === 'ideal_gas_air' || tableData.type === 'ideal_gas_molar') {
-    return row.cells.T ? `T = ${row.cells.T} K` : `Row ${row.rowKey}`;
+  if (
+    tableData.type === 'ideal_gas_air' ||
+    tableData.type === 'ideal_gas_molar' ||
+    tableData.type === 'specific_heat_temp'
+  ) {
+    return row.cells.T ? `T = ${row.cells.T} ${tUnit}` : `Row ${row.rowKey}`;
+  }
+  if (
+    tableData.type === 'critical_properties' ||
+    tableData.type === 'specific_heat_300k' ||
+    tableData.type === 'specific_heat_poly' ||
+    tableData.type === 'liquids' ||
+    tableData.type === 'solids' ||
+    tableData.type === 'foods'
+  ) {
+    if (row.cells.substance) {
+      if (tableData.type === 'liquids' && row.cells.T_liq) {
+        return `${row.cells.substance} (${row.cells.T_liq} ${tUnit})`;
+      }
+      if (tableData.type === 'solids' && row.cells.T && row.cells.T !== '—') {
+        return `${row.cells.substance} (${row.cells.T} ${tUnit})`;
+      }
+      return row.cells.substance;
+    }
   }
   return `Row ${row.rowKey}`;
 }
@@ -673,6 +1012,17 @@ function SnippetModalDialog({
     [tempUnit]
   );
 
+  const formatTempFromKDisplay = useCallback(
+    (val?: ThermoValue) => {
+      if (!val) return '-';
+      if (tempUnit === 'C') {
+        return (val.v - 273.15).toFixed(2);
+      }
+      return val.s;
+    },
+    [tempUnit]
+  );
+
   const formatSatTemp = useCallback(
     (val?: ThermoValue) => {
       if (!val || val.s === 'N/A') return 'N/A';
@@ -692,6 +1042,23 @@ function SnippetModalDialog({
       }
       if (pressUnit === 'bar') {
         return (val.v / 100).toFixed(4);
+      }
+      return val.s;
+    },
+    [pressUnit]
+  );
+
+  const formatPressFromMPaDisplay = useCallback(
+    (val?: ThermoValue) => {
+      if (!val) return '-';
+      if (pressUnit === 'kPa') {
+        return Number((val.v * 1000).toFixed(2)).toString();
+      }
+      if (pressUnit === 'bar') {
+        const decimals = val.s.includes('.')
+          ? Math.max(1, (val.s.split('.')[1]?.length || 2) - 1)
+          : 1;
+        return (val.v * 10).toFixed(decimals);
       }
       return val.s;
     },
@@ -748,7 +1115,9 @@ function SnippetModalDialog({
       activeBlockIdxs: initialBlockIdxs,
       allColumns,
       formatTempDisplay,
+      formatTempFromKDisplay,
       formatPressDisplay,
+      formatPressFromMPaDisplay,
       formatIsobarPress,
       formatSatTemp,
     });
@@ -764,7 +1133,9 @@ function SnippetModalDialog({
       activeBlockIdxs,
       allColumns,
       formatTempDisplay,
+      formatTempFromKDisplay,
       formatPressDisplay,
+      formatPressFromMPaDisplay,
       formatIsobarPress,
       formatSatTemp,
     });
@@ -775,7 +1146,9 @@ function SnippetModalDialog({
     activeBlockIdxs,
     allColumns,
     formatTempDisplay,
+    formatTempFromKDisplay,
     formatPressDisplay,
+    formatPressFromMPaDisplay,
     formatIsobarPress,
     formatSatTemp,
   ]);
