@@ -17,6 +17,7 @@ export interface InterpolatedRowSpec {
   inputValue: string;
   showMoreDigits?: boolean;
   showAnalytic?: boolean;
+  isEditing?: boolean;
 }
 
 export interface SolvedCell {

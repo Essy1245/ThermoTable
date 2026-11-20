@@ -675,8 +675,10 @@ export default function App() {
     afterIndex: number;
     dominatingColId: string;
     inputValue: string;
+    startEditing?: boolean;
   }) => {
     const id = `interp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const shouldEdit = params.startEditing ?? !params.inputValue.trim();
     const newSpec: InterpolatedRowSpec = {
       id,
       blockIndex: params.blockIndex,
@@ -685,6 +687,7 @@ export default function App() {
       inputValue: params.inputValue,
       showMoreDigits: false,
       showAnalytic: false,
+      isEditing: shouldEdit,
     };
     setTableInterpolatedRows(prev => ({
       ...prev,
@@ -726,12 +729,23 @@ export default function App() {
     requestAnimationFrame(() => {
       const rowEl = findRowEl(id);
       rowEl?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
-      if (!params.inputValue) {
+      if (shouldEdit) {
         const inputEl = rowEl?.querySelector('input');
         inputEl?.focus();
       }
     });
   }, [currentTableId, disabledBlocks, collapsedBlocks, setDisabledBlocks, setCollapsedBlocks, unhideColumnIfHidden, findRowEl]);
+
+  const handleSetInterpEditing = useCallback((id: string, editing: boolean) => {
+    updateInterpSpec(id, s => ({ ...s, isEditing: editing }));
+    if (editing) {
+      requestAnimationFrame(() => {
+        const rowEl = findRowEl(id);
+        const inputEl = rowEl?.querySelector('input');
+        inputEl?.focus();
+      });
+    }
+  }, [updateInterpSpec, findRowEl]);
 
   const handleUpdateInterpInput = useCallback((id: string, value: string) => {
     updateInterpSpec(id, s => ({ ...s, inputValue: value }));
@@ -1598,6 +1612,7 @@ export default function App() {
         onDelete={handleDeleteInterpRow}
         onToggleMoreDigits={handleToggleMoreDigits}
         onToggleAnalytic={handleToggleAnalytic}
+        onSetEditing={handleSetInterpEditing}
         onRelocate={handleRelocateInterpRow}
       />
     ));
@@ -1881,11 +1896,11 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setActionModalMode('interpolate')}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 h-8 rounded text-sm font-semibold bg-emerald-600/90 hover:bg-emerald-500 active:bg-emerald-700 text-white border border-emerald-300/40 transition-colors cursor-pointer shrink-0 shadow-sm"
-                  title="Insert & solve an interpolated row between two table rows"
+                  className="inline-flex items-center justify-center w-8 h-8 rounded text-sm font-semibold bg-emerald-600/90 hover:bg-emerald-500 active:bg-emerald-700 text-white border border-emerald-300/40 transition-colors cursor-pointer shrink-0 shadow-sm"
+                  title="Add interpolated row"
+                  aria-label="Add interpolated row"
                 >
                   <Plus className="w-4 h-4 shrink-0" />
-                  <span>Interpolate</span>
                 </button>
               </>
             )}

@@ -6,9 +6,11 @@ import {
   Crop,
   FunctionSquare,
   Highlighter,
+  Pencil,
   Plus,
   Search,
   Sparkles,
+  Trash2,
   X,
 } from 'lucide-react';
 import type {
@@ -16,7 +18,7 @@ import type {
   SolvedInterpolatedRow,
   TempUnit,
 } from './interpolation';
-import { findBoundingRowGap, getRowColumnDisplayValue } from './interpolation';
+import { findBoundingRowGap } from './interpolation';
 import { formatPressure } from './data/pressureUnits';
 import type { ThermoTableData } from './data/types';
 
@@ -45,6 +47,7 @@ interface InterpolatedRowGroupProps {
   onDelete: (id: string) => void;
   onToggleMoreDigits: (id: string) => void;
   onToggleAnalytic: (id: string) => void;
+  onSetEditing: (id: string, editing: boolean) => void;
   onRelocate?: (id: string) => void;
 }
 
@@ -66,9 +69,11 @@ export function InterpolatedRowGroup({
   onDelete,
   onToggleMoreDigits,
   onToggleAnalytic,
+  onSetEditing,
   onRelocate,
 }: InterpolatedRowGroupProps) {
   const { spec } = solved;
+  const isEditing = Boolean(spec.isEditing);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const handleCopy = (key: string, text: string) => {
@@ -79,7 +84,7 @@ export function InterpolatedRowGroup({
     setTimeout(() => setCopiedKey(null), 1500);
   };
 
-  const domCol = visibleCols.find((c) => c.id === spec.dominatingColId);
+  const knownCol = visibleCols.find((c) => c.id === spec.dominatingColId);
   const weightText =
     solved.isValidInput && solved.weight !== undefined
       ? solved.weight.toFixed(6).replace(/0+$/, '').replace(/\.$/, '')
@@ -90,15 +95,21 @@ export function InterpolatedRowGroup({
       <tr
         data-row-key={spec.id}
         ref={rowRef}
-        className="bg-emerald-50/75 dark:bg-[#0d241b] transition-colors"
+        className={`${
+          isEditing
+            ? 'bg-emerald-50 dark:bg-[#102c21]'
+            : 'bg-emerald-50/70 dark:bg-[#0d241b]'
+        } transition-colors`}
       >
         <td
           data-pin-cell="true"
-          className={`px-1 py-1.5 border-b border-emerald-200/80 dark:border-emerald-800/60 border-l-4 border-l-emerald-500 sticky left-0 z-10 bg-emerald-50 dark:bg-[#0d241b] ${
-            isHighlighted ? 'ring-1 ring-indigo-400' : ''
-          }`}
+          className={`px-1 py-1.5 border-t border-b border-dashed [border-left-style:solid] border-emerald-400/80 dark:border-emerald-700/70 border-l-4 border-l-emerald-500 sticky left-0 z-10 ${
+            isEditing
+              ? 'bg-emerald-50 dark:bg-[#102c21]'
+              : 'bg-emerald-50/95 dark:bg-[#0d241b]'
+          } ${isHighlighted ? 'ring-1 ring-indigo-400' : ''}`}
         >
-          <div className="flex items-center justify-center gap-0.5">
+          <div className="flex items-center justify-center">
             <button
               type="button"
               onClick={(e) => {
@@ -114,23 +125,11 @@ export function InterpolatedRowGroup({
             >
               <Highlighter className="w-3.5 h-3.5" />
             </button>
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                onDelete(spec.id);
-              }}
-              className="p-1 rounded text-gray-400 dark:text-gray-500 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-100/70 dark:hover:bg-red-950/60 cursor-pointer transition-colors"
-              title="Remove interpolated row"
-              aria-label="Remove interpolated row"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
           </div>
         </td>
 
         {visibleCols.map((col) => {
-          const isDom = col.id === spec.dominatingColId;
+          const isKnown = col.id === spec.dominatingColId;
           const solvedCell = solved.cells[col.id];
           const isColSel = selectedCols.has(col.id);
           const isColHov = hoveredCol === col.id;
@@ -140,6 +139,12 @@ export function InterpolatedRowGroup({
                 ? solvedCell.fullPrecision
                 : solvedCell.display
               : '—';
+          const lockedKnownText =
+            solved.isValidInput && solvedCell
+              ? spec.showMoreDigits
+                ? spec.inputValue.trim() || solvedCell.fullPrecision
+                : solvedCell.display
+              : spec.inputValue.trim() || '—';
 
           return (
             <td
@@ -147,56 +152,80 @@ export function InterpolatedRowGroup({
               data-col-id={col.id}
               onMouseEnter={() => onMouseEnterCol(col.id)}
               onMouseLeave={onMouseLeaveCol}
-              onClick={() => {
-                if (!isDom) {
-                  const prefill =
-                    solved.isValidInput && solvedCell ? solvedCell.fullPrecision.replace(/,/g, '') : undefined;
-                  onSelectDominatingCol(spec.id, col.id, prefill);
-                }
-              }}
-              className={`px-1.5 py-1 text-xs font-mono tabular-nums whitespace-nowrap border-b border-emerald-200/80 dark:border-emerald-800/60 transition-colors ${
+              onClick={
+                isEditing && !isKnown
+                  ? () => {
+                      const prefill =
+                        solved.isValidInput && solvedCell
+                          ? solvedCell.fullPrecision.replace(/,/g, '')
+                          : undefined;
+                      onSelectDominatingCol(spec.id, col.id, prefill);
+                    }
+                  : undefined
+              }
+              className={`px-1.5 py-1 text-xs font-mono tabular-nums whitespace-nowrap border-t border-b border-dashed [border-right-style:solid] border-emerald-400/80 dark:border-emerald-700/70 transition-colors ${
                 col.align === 'left' ? 'text-left' : 'text-right'
               } ${
                 col.isCategoryEnd
                   ? 'border-r-2 border-r-emerald-300/80 dark:border-r-emerald-700/70'
                   : 'border-r border-r-emerald-200/50 dark:border-r-emerald-800/40'
               } ${
-                isDom
+                isKnown
                   ? 'bg-emerald-100/90 dark:bg-emerald-900/45'
                   : isColSel
-                    ? 'bg-red-100/70 dark:bg-[#3b1d2b]/70 cursor-pointer'
+                    ? `bg-red-100/70 dark:bg-[#3b1d2b]/70 ${isEditing ? 'cursor-pointer' : ''}`
                     : isColHov
-                      ? 'bg-emerald-100/60 dark:bg-emerald-900/30 cursor-pointer'
-                      : 'cursor-pointer hover:bg-emerald-100/60 dark:hover:bg-emerald-900/25'
+                      ? `bg-emerald-100/60 dark:bg-emerald-900/30 ${isEditing ? 'cursor-pointer' : ''}`
+                      : isEditing
+                        ? 'cursor-pointer hover:bg-emerald-100/60 dark:hover:bg-emerald-900/25'
+                        : ''
               }`}
               title={
-                isDom
-                  ? 'Dominating input parameter — enter as many decimals as needed'
-                  : 'Click to solve using this property as input'
+                isEditing
+                  ? isKnown
+                    ? 'Known parameter — enter as many decimals as needed'
+                    : 'Click to use this property as the known parameter'
+                  : isKnown
+                    ? `Known parameter (${spec.inputValue.trim() || 'empty'}) — click Edit below to modify`
+                    : 'Interpolated value — click Edit below to modify'
               }
             >
-              {isDom ? (
+              {isKnown && isEditing ? (
                 <div className="flex items-center justify-end gap-1">
                   <span className="text-[9px] font-sans font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-emerald-600 text-white shrink-0">
-                    In
+                    Known
                   </span>
                   <input
                     type="text"
                     inputMode="decimal"
                     value={spec.inputValue}
                     onChange={(e) => onUpdateInput(spec.id, e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && solved.isValidInput) {
+                        onSetEditing(spec.id, false);
+                      }
+                    }}
                     onClick={(e) => e.stopPropagation()}
                     onFocus={(e) => e.target.select()}
                     placeholder="Value..."
-                    aria-label={`Input value for ${col.label}`}
+                    aria-label={`Known value for ${col.label}`}
                     className="w-20 sm:w-24 px-1.5 py-0.5 text-right text-xs font-semibold font-mono tabular-nums bg-white dark:bg-gray-900 text-gray-900 dark:text-white border-2 border-emerald-500 rounded focus:outline-none focus:ring-2 focus:ring-emerald-400"
                   />
+                </div>
+              ) : isKnown ? (
+                <div className="flex items-center justify-end gap-1">
+                  <span className="text-[9px] font-sans font-bold uppercase tracking-wider px-1 py-0.5 rounded bg-emerald-600/15 dark:bg-emerald-500/25 text-emerald-800 dark:text-emerald-200 border border-emerald-400/60 dark:border-emerald-500/40 shrink-0">
+                    Known
+                  </span>
+                  <span className="font-bold text-emerald-950 dark:text-emerald-100">
+                    {lockedKnownText}
+                  </span>
                 </div>
               ) : (
                 <span
                   className={
                     solved.isValidInput && solvedCell
-                      ? 'font-semibold text-emerald-950 dark:text-emerald-200'
+                      ? 'italic font-semibold text-emerald-950 dark:text-emerald-200'
                       : 'text-emerald-700/50 dark:text-emerald-400/50'
                   }
                 >
@@ -208,16 +237,16 @@ export function InterpolatedRowGroup({
         })}
 
         {hasTrailingSpacer && (
-          <td className="bg-emerald-50/40 dark:bg-[#0d241b] border-b border-emerald-200/80 dark:border-emerald-800/60 p-0" />
+          <td className="bg-emerald-50/40 dark:bg-[#0d241b] border-t border-b border-dashed border-emerald-400/80 dark:border-emerald-700/70 p-0" />
         )}
       </tr>
 
       {/* Companion Info / Precision / Analytic Formula Bar */}
       <tr className="bg-emerald-50/55 dark:bg-[#0a1c15]">
-        <td className="sticky left-0 z-10 bg-emerald-50/90 dark:bg-[#0a1c15] border-b border-emerald-300/70 dark:border-emerald-800/70 border-l-4 border-l-emerald-500" />
+        <td className="sticky left-0 z-10 bg-emerald-50/90 dark:bg-[#0a1c15] border-b border-dashed [border-left-style:solid] border-emerald-400/80 dark:border-emerald-700/70 border-l-4 border-l-emerald-500" />
         <td
           colSpan={visibleCols.length + (hasTrailingSpacer ? 1 : 0)}
-          className="border-b border-emerald-300/70 dark:border-emerald-800/70 p-0"
+          className="border-b border-dashed border-emerald-400/80 dark:border-emerald-700/70 p-0"
         >
           <div
             className={`sticky left-14 w-fit ${
@@ -227,26 +256,40 @@ export function InterpolatedRowGroup({
             } px-2 py-1 flex flex-col gap-1.5 text-[11px]`}
           >
             <div className="flex flex-wrap items-center gap-1.5">
-              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-600/15 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-bold uppercase tracking-wider text-[10px]">
-                <Sparkles className="w-2.5 h-2.5" />
-                Interp
-              </span>
+              {isEditing ? (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-500/20 dark:bg-amber-500/25 text-amber-900 dark:text-amber-200 font-bold uppercase tracking-wider text-[10px]">
+                  <Pencil className="w-2.5 h-2.5" />
+                  Editing
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-600/15 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-bold uppercase tracking-wider text-[10px]">
+                  <Sparkles className="w-2.5 h-2.5" />
+                  Interp
+                </span>
+              )}
 
               <span className="text-emerald-900 dark:text-emerald-200 font-medium">
                 {solved.isValidInput && weightText ? (
                   <>
-                    Driven by <strong>{domCol?.label ?? spec.dominatingColId}</strong> · w ={' '}
+                    Known: <strong>{knownCol?.label ?? spec.dominatingColId}</strong> · w ={' '}
                     <span className="font-mono">{weightText}</span>
-                    {!compactCard && (
+                    {!compactCard && !isEditing && (
                       <span className="text-emerald-700/80 dark:text-emerald-300/70 ml-1">
                         ({solved.x1Str} ↔ {solved.x2Str})
                       </span>
                     )}
+                    {!compactCard && isEditing && (
+                      <span className="text-emerald-700/80 dark:text-emerald-300/70 ml-1">
+                        (click any cell to change known parameter)
+                      </span>
+                    )}
+                  </>
+                ) : isEditing ? (
+                  <>
+                    Enter decimals in <strong>{knownCol?.label ?? spec.dominatingColId}</strong> or tap any cell to switch known parameter
                   </>
                 ) : (
-                  <>
-                    Enter decimals in <strong>{domCol?.label ?? spec.dominatingColId}</strong> or tap any cell above
-                  </>
+                  <>No value entered — click Edit to enter a known value</>
                 )}
               </span>
 
@@ -266,35 +309,71 @@ export function InterpolatedRowGroup({
                 </span>
               )}
 
-              {solved.isValidInput && (
-                <div className="flex items-center gap-1 ml-auto">
-                  <button
-                    type="button"
-                    onClick={() => onToggleMoreDigits(spec.id)}
-                    className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer ${
-                      spec.showMoreDigits
-                        ? 'bg-emerald-600 text-white border-emerald-700'
-                        : 'bg-white dark:bg-gray-900 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
-                    }`}
-                    title="Show extra unrounded digits for intermediate calculations"
-                  >
-                    {spec.showMoreDigits ? 'Col precision' : 'More digits'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => onToggleAnalytic(spec.id)}
-                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer ${
-                      spec.showAnalytic
-                        ? 'bg-emerald-600 text-white border-emerald-700'
-                        : 'bg-white dark:bg-gray-900 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
-                    }`}
-                    title="Show step-by-step linear interpolation equation"
-                  >
-                    <FunctionSquare className="w-3 h-3" />
-                    Analytic
-                  </button>
-                </div>
-              )}
+              <div className="flex items-center gap-1 ml-auto">
+                {isEditing ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onSetEditing(spec.id, false)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-700 text-white border border-emerald-700 text-[10px] font-semibold transition-colors cursor-pointer shadow-xs"
+                      title="Lock row values and exit edit mode"
+                    >
+                      <Check className="w-3 h-3" />
+                      Finish editing
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onDelete(spec.id)}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-white dark:bg-gray-900 text-red-700 dark:text-red-400 border border-red-300 dark:border-red-800/80 hover:bg-red-50 dark:hover:bg-red-950/60 text-[10px] font-semibold transition-colors cursor-pointer"
+                      title="Remove interpolated row"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      Remove
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    {solved.isValidInput && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => onToggleMoreDigits(spec.id)}
+                          className={`px-1.5 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer ${
+                            spec.showMoreDigits
+                              ? 'bg-emerald-600 text-white border-emerald-700'
+                              : 'bg-white dark:bg-gray-900 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
+                          }`}
+                          title="Show extra unrounded digits for intermediate calculations"
+                        >
+                          {spec.showMoreDigits ? 'Col precision' : 'More digits'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onToggleAnalytic(spec.id)}
+                          className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border text-[10px] font-semibold transition-colors cursor-pointer ${
+                            spec.showAnalytic
+                              ? 'bg-emerald-600 text-white border-emerald-700'
+                              : 'bg-white dark:bg-gray-900 text-emerald-800 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
+                          }`}
+                          title="Show step-by-step linear interpolation equation"
+                        >
+                          <FunctionSquare className="w-3 h-3" />
+                          Analytic
+                        </button>
+                      </>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => onSetEditing(spec.id, true)}
+                      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded border bg-white dark:bg-gray-900 text-gray-700 dark:text-gray-200 border-gray-300 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-[10px] font-semibold transition-colors cursor-pointer"
+                      title="Edit known parameter, value, or remove this row"
+                    >
+                      <Pencil className="w-2.5 h-2.5" />
+                      Edit
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
 
             {spec.showAnalytic && solved.isValidInput && (
@@ -365,6 +444,7 @@ interface ActionMenuModalProps {
     afterIndex: number;
     dominatingColId: string;
     inputValue: string;
+    startEditing?: boolean;
   }) => void;
   activeSnippetRowCount: number;
   onOpenSnippet: () => void;
@@ -397,10 +477,8 @@ export function ActionMenuModal({
     tableData?.type === 'saturated' ? tableData.indexProperty : 'T';
 
   const [selectedBlock, setSelectedBlock] = useState<number>(0);
-  const [insertMode, setInsertMode] = useState<'value' | 'gap'>('gap');
   const [selectedCol, setSelectedCol] = useState<string>(defaultCol);
   const [interpValue, setInterpValue] = useState<string>('');
-  const [selectedGap, setSelectedGap] = useState<number>(0);
 
   if (!isOpen || !tableData) return null;
 
@@ -413,23 +491,27 @@ export function ActionMenuModal({
     : 'rows' in tableData
       ? tableData.rows
       : [];
-  const maxGap = Math.max(0, rowsInBlock.length - 2);
-  const clampedGap = Math.min(selectedGap, maxGap);
-  const indexColId = tableData.type === 'saturated' ? tableData.indexProperty : 'T';
+
+  const parsedNum = Number(interpValue.trim().replace(/,/g, '').replace(/−/g, '-'));
+  const hasValidNum = interpValue.trim() !== '' && Number.isFinite(parsedNum);
 
   const handleInsert = () => {
-    const num = Number(interpValue.trim().replace(/,/g, '').replace(/−/g, '-'));
-    const hasNum = interpValue.trim() !== '' && Number.isFinite(num);
-    const targetGap =
-      insertMode === 'value' && hasNum
-        ? findBoundingRowGap(tableData, activeCol, num, tempUnit, pressUnit, activeBlock)
-        : clampedGap;
+    if (!hasValidNum) return;
+    const targetGap = findBoundingRowGap(
+      tableData,
+      activeCol,
+      parsedNum,
+      tempUnit,
+      pressUnit,
+      activeBlock
+    );
 
     onAddInterpolatedRow({
       blockIndex: activeBlock,
       afterIndex: Math.max(0, targetGap),
       dominatingColId: activeCol,
-      inputValue: hasNum ? interpValue.trim() : '',
+      inputValue: interpValue.trim(),
+      startEditing: false,
     });
     setInterpValue('');
     onClose();
@@ -547,7 +629,7 @@ export function ActionMenuModal({
                 Interpolation Solver
               </div>
               <p className="text-xs text-gray-600 dark:text-gray-400">
-                Insert an empty row between two adjacent rows, then enter any property value (with as many decimals as possible) to solve all remaining columns.
+                Enter a known parameter and value (with as many decimals as possible) to place and solve a row between its surrounding table rows. You can also use the <strong>+</strong> icon next to any row in the table.
               </p>
 
               {isIsobar && (
@@ -567,34 +649,9 @@ export function ActionMenuModal({
                 </div>
               )}
 
-              <div className="grid grid-cols-2 gap-1.5 bg-gray-100 dark:bg-gray-800 p-1 rounded-md text-xs font-semibold">
-                <button
-                  type="button"
-                  onClick={() => setInsertMode('gap')}
-                  className={`py-1.5 rounded cursor-pointer transition-colors ${
-                    insertMode === 'gap'
-                      ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-xs'
-                      : 'text-gray-600 dark:text-gray-400'
-                  }`}
-                >
-                  Pick Surrounding Rows
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setInsertMode('value')}
-                  className={`py-1.5 rounded cursor-pointer transition-colors ${
-                    insertMode === 'value'
-                      ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-xs'
-                      : 'text-gray-600 dark:text-gray-400'
-                  }`}
-                >
-                  Find by Value
-                </button>
-              </div>
-
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-xs font-semibold mb-1">Dominating Parameter</label>
+                  <label className="block text-xs font-semibold mb-1">Known Parameter</label>
                   <select
                     value={activeCol}
                     onChange={(e) => setSelectedCol(e.target.value)}
@@ -608,80 +665,27 @@ export function ActionMenuModal({
                   </select>
                 </div>
 
-                {insertMode === 'gap' ? (
-                  <div>
-                    <label className="block text-xs font-semibold mb-1">Between Rows</label>
-                    <select
-                      value={clampedGap}
-                      onChange={(e) => setSelectedGap(Number(e.target.value))}
-                      className="w-full px-2.5 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800"
-                    >
-                      {Array.from({ length: maxGap + 1 }, (_, i) => {
-                        const v1 = getRowColumnDisplayValue(
-                          tableData,
-                          i,
-                          indexColId,
-                          tempUnit,
-                          pressUnit,
-                          activeBlock
-                        );
-                        const v2 = getRowColumnDisplayValue(
-                          tableData,
-                          i + 1,
-                          indexColId,
-                          tempUnit,
-                          pressUnit,
-                          activeBlock
-                        );
-                        const unitStr =
-                          indexColId === 'P' ? pressUnit : tempUnit === 'K' ? 'K' : '°C';
-                        return (
-                          <option key={i} value={i}>
-                            {v1?.s ?? `#${i + 1}`} ↔ {v2?.s ?? `#${i + 2}`} {unitStr}
-                          </option>
-                        );
-                      })}
-                    </select>
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-xs font-semibold mb-1">Target Value</label>
-                    <input
-                      type="text"
-                      inputMode="decimal"
-                      value={interpValue}
-                      onChange={(e) => setInterpValue(e.target.value)}
-                      onKeyDown={(e) => e.key === 'Enter' && handleInsert()}
-                      placeholder="Enter decimals..."
-                      className="w-full px-2.5 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 font-mono"
-                    />
-                  </div>
-                )}
-              </div>
-
-              {insertMode === 'gap' && (
                 <div>
-                  <label className="block text-xs font-semibold mb-1">
-                    Initial Value <span className="font-normal text-gray-500">(optional — leave blank for empty row)</span>
-                  </label>
+                  <label className="block text-xs font-semibold mb-1">Known Value</label>
                   <input
                     type="text"
                     inputMode="decimal"
                     value={interpValue}
                     onChange={(e) => setInterpValue(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleInsert()}
-                    placeholder="e.g. 22.3456 or leave empty"
+                    onKeyDown={(e) => e.key === 'Enter' && hasValidNum && handleInsert()}
+                    placeholder="Enter decimals..."
                     className="w-full px-2.5 py-1.5 text-sm rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 font-mono"
                   />
                 </div>
-              )}
+              </div>
 
               <button
                 type="button"
                 onClick={handleInsert}
-                className="w-full py-2 rounded-md text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 text-white cursor-pointer transition-colors"
+                disabled={!hasValidNum}
+                className="w-full py-2 rounded-md text-sm font-semibold bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-600/40 disabled:cursor-not-allowed text-white cursor-pointer transition-colors"
               >
-                {interpValue.trim() ? 'Insert & Solve Row' : 'Add Empty Row'}
+                Insert &amp; Solve Row
               </button>
             </div>
           )}
