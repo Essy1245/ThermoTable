@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { TableMeta } from '../data/tablesMeta';
 import { formatPressure } from '../data/pressureUnits';
+import type { SolvedInterpolatedRow } from '../interpolation';
 import type {
   ThermoTableData,
   ThermoValue,
@@ -50,6 +51,7 @@ interface SnippetModalProps {
   touchedBlocks: Set<number>;
   disabledBlocks: Set<number>;
   selectedCols: Set<string>;
+  interpolatedRows?: SolvedInterpolatedRow[];
   onClearAllSelections: () => void;
 }
 
@@ -80,7 +82,7 @@ function buildAllColumns(
       { id: 'T_cr', symbol: 'T', subscript: 'cr', unit: tempUnit === 'K' ? 'K' : '°C', label: 'Tcr' },
       { id: 'P_cr', symbol: 'P', subscript: 'cr', unit: pressUnit, label: 'Pcr' },
       { id: 'v_cr', symbol: 'v', subscript: 'cr', unit: 'm³/kmol', label: 'vcr' },
-    ];
+    ].filter(col => col.id === 'substance' || visibleCols[`property_${col.id}`] !== false);
   }
 
   if (tableData.type === 'specific_heat_300k') {
@@ -91,7 +93,7 @@ function buildAllColumns(
       { id: 'cp', symbol: 'c', subscript: 'p', unit: 'kJ/kg · K', label: 'cp' },
       { id: 'cv', symbol: 'c', subscript: 'v', unit: 'kJ/kg · K', label: 'cv' },
       { id: 'k', symbol: 'k', unit: '', label: 'k' },
-    ];
+    ].filter(col => col.id === 'substance' || visibleCols[`property_${col.id}`] !== false);
   }
 
   if (tableData.type === 'specific_heat_temp') {
@@ -127,11 +129,20 @@ function buildAllColumns(
       { id: 'tempRange', symbol: 'T', subscript: 'range', unit: tempUnit === 'K' ? 'K' : '°C', label: 'Temp Range' },
       { id: 'errorMax', symbol: 'Err', subscript: 'max', unit: '%', label: 'Max % Err' },
       { id: 'errorAvg', symbol: 'Err', subscript: 'avg', unit: '%', label: 'Avg % Err' },
-    ];
+    ].filter(col => col.id === 'substance' || visibleCols[`property_${col.id}`] !== false);
   }
 
   if (tableData.type === 'liquids') {
     const tUnit = tempUnit === 'K' ? 'K' : '°C';
+    const liquidGroupMap: Record<string, string> = {
+      T_boil: 'liq_boil',
+      h_fg: 'liq_boil',
+      T_freeze: 'liq_freeze',
+      h_if: 'liq_freeze',
+      T_liq: 'liq_props',
+      rho: 'liq_props',
+      cp: 'liq_props',
+    };
     return [
       { id: 'substance', symbol: 'Substance', unit: '', label: 'Substance', isIndex: true },
       { id: 'T_boil', symbol: 'T', subscript: 'b', unit: tUnit, label: 'Boiling Pt' },
@@ -141,7 +152,11 @@ function buildAllColumns(
       { id: 'T_liq', symbol: 'T', unit: tUnit, label: 'Liquid Temp' },
       { id: 'rho', symbol: 'ρ', unit: 'kg/m³', label: 'ρ' },
       { id: 'cp', symbol: 'c', subscript: 'p', unit: 'kJ/kg · K', label: 'cp' },
-    ];
+    ].filter(col => {
+      if (col.id === 'substance') return true;
+      const grp = liquidGroupMap[col.id];
+      return (!grp || visibleCols[`property_${grp}`] !== false) && visibleCols[`property_${col.id}`] !== false;
+    });
   }
 
   if (tableData.type === 'solids') {
@@ -152,7 +167,7 @@ function buildAllColumns(
       { id: 'T', symbol: 'T', unit: tUnit, label: 'Temp' },
       { id: 'rho', symbol: 'ρ', unit: 'kg/m³', label: 'ρ' },
       { id: 'cp', symbol: 'c', subscript: 'p', unit: 'kJ/kg · K', label: 'cp' },
-    ];
+    ].filter(col => col.id === 'substance' || visibleCols[`property_${col.id}`] !== false);
   }
 
   if (tableData.type === 'foods') {
@@ -164,7 +179,7 @@ function buildAllColumns(
       { id: 'cp_above', symbol: 'c', subscript: 'p,above', unit: 'kJ/kg · K', label: 'cp (above)' },
       { id: 'cp_below', symbol: 'c', subscript: 'p,below', unit: 'kJ/kg · K', label: 'cp (below)' },
       { id: 'h_if', symbol: 'h', subscript: 'if', unit: 'kJ/kg', label: 'Latent Heat' },
-    ];
+    ].filter(col => col.id === 'substance' || visibleCols[`property_${col.id}`] !== false);
   }
 
   if (tableData.type === 'saturated') {
@@ -296,12 +311,48 @@ function computeInitialBlockIdxs(
   return firstVisible >= 0 ? new Set([firstVisible]) : new Set([0]);
 }
 
+function mergePinnedFlatRows(
+  rowCount: number,
+  pinnedRows: Set<string>,
+  interpolatedRows: SolvedInterpolatedRow[],
+  buildTypicalCells: (idx: number) => Record<string, string>
+): SnippetRowItem[] {
+  const items: { sortPos: number; row: SnippetRowItem }[] = [];
+
+  for (const key of pinnedRows) {
+    if (key.startsWith('interp-')) continue;
+    const idx = parseInt(key, 10);
+    if (!isNaN(idx) && idx >= 0 && idx < rowCount) {
+      items.push({
+        sortPos: idx,
+        row: { rowKey: idx.toString(), cells: buildTypicalCells(idx) },
+      });
+    }
+  }
+
+  for (const solved of interpolatedRows) {
+    if (!solved.isValidInput || !pinnedRows.has(solved.spec.id)) continue;
+    const cells: Record<string, string> = {};
+    for (const [colId, cell] of Object.entries(solved.cells)) {
+      cells[colId] = cell.display;
+    }
+    items.push({
+      sortPos: solved.spec.afterIndex + 0.5,
+      row: { rowKey: solved.spec.id, cells },
+    });
+  }
+
+  items.sort((a, b) => a.sortPos - b.sortPos);
+  return items.map((item) => item.row);
+}
+
 function buildRowGroups({
   tableData,
   pinnedRows,
   pinnedTemps,
   activeBlockIdxs,
   allColumns,
+  interpolatedRows = [],
   formatTempDisplay,
   formatTempFromKDisplay,
   formatPressDisplay,
@@ -314,6 +365,7 @@ function buildRowGroups({
   pinnedTemps: Set<string>;
   activeBlockIdxs: Set<number>;
   allColumns: SnippetColumnDef[];
+  interpolatedRows?: SolvedInterpolatedRow[];
   formatTempDisplay: (val?: ThermoValue) => string;
   formatTempFromKDisplay: (val?: ThermoValue) => string;
   formatPressDisplay: (val?: ThermoValue) => string;
@@ -381,33 +433,20 @@ function buildRowGroups({
   }
 
   if (tableData.type === 'specific_heat_temp') {
-    const sortedRowIndices = Array.from(pinnedRows)
-      .map((k) => parseInt(k, 10))
-      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
-      .sort((a, b) => a - b);
-
-    if (sortedRowIndices.length === 0) return [];
-
-    return [
-      {
-        rows: sortedRowIndices.map((idx) => {
-          const row = tableData.rows[idx];
-          const cells: Record<string, string> = {
-            T: formatTempFromKDisplay(row.T),
-          };
-          for (const g of A2B_GASES) {
-            const triplet = row[g.id];
-            cells[`${g.id}_cp`] = triplet.cp.s;
-            cells[`${g.id}_cv`] = triplet.cv.s;
-            cells[`${g.id}_k`] = triplet.k.s;
-          }
-          return {
-            rowKey: idx.toString(),
-            cells,
-          };
-        }),
-      },
-    ];
+    const rows = mergePinnedFlatRows(tableData.rows.length, pinnedRows, interpolatedRows, (idx) => {
+      const row = tableData.rows[idx];
+      const cells: Record<string, string> = {
+        T: formatTempFromKDisplay(row.T),
+      };
+      for (const g of A2B_GASES) {
+        const triplet = row[g.id];
+        cells[`${g.id}_cp`] = triplet.cp.s;
+        cells[`${g.id}_cv`] = triplet.cv.s;
+        cells[`${g.id}_k`] = triplet.k.s;
+      }
+      return cells;
+    });
+    return rows.length === 0 ? [] : [{ rows }];
   }
 
   if (tableData.type === 'specific_heat_poly') {
@@ -545,31 +584,21 @@ function buildRowGroups({
   }
 
   if (tableData.type === 'saturated') {
-    const sortedRowIndices = Array.from(pinnedRows)
-      .map((k) => parseInt(k, 10))
-      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
-      .sort((a, b) => a - b);
-
-    if (sortedRowIndices.length === 0) return [];
-
-    return [
-      {
-        rows: sortedRowIndices.map((idx) => {
-          const row = tableData.rows[idx];
-          const cells: Record<string, string> = {
-            T: formatTempDisplay(row.T),
-            P: formatPressDisplay(row.P),
-          };
-          const rec = row as Record<string, ThermoValue | undefined>;
-          for (const col of allColumns) {
-            if (col.id !== 'T' && col.id !== 'P') {
-              cells[col.id] = rec[col.id]?.s ?? '-';
-            }
-          }
-          return { rowKey: idx.toString(), cells };
-        }),
-      },
-    ];
+    const rows = mergePinnedFlatRows(tableData.rows.length, pinnedRows, interpolatedRows, (idx) => {
+      const row = tableData.rows[idx];
+      const cells: Record<string, string> = {
+        T: formatTempDisplay(row.T),
+        P: formatPressDisplay(row.P),
+      };
+      const rec = row as Record<string, ThermoValue | undefined>;
+      for (const col of allColumns) {
+        if (col.id !== 'T' && col.id !== 'P') {
+          cells[col.id] = rec[col.id]?.s ?? '-';
+        }
+      }
+      return cells;
+    });
+    return rows.length === 0 ? [] : [{ rows }];
   }
 
   if (tableData.type === 'superheated' || tableData.type === 'compressed') {
@@ -583,7 +612,8 @@ function buildRowGroups({
       const block = tableData.blocks[bIdx];
       if (!block) continue;
 
-      const matchingRows: { rowKey: string; cells: Record<string, string> }[] = [];
+      const sortedItems: { sortPos: number; row: { rowKey: string; cells: Record<string, string> } }[] = [];
+      const hasAnyRowPin = pinnedTemps.size > 0 || pinnedRows.size > 0;
 
       block.rows.forEach((row, rIdx) => {
         const rKey = `${bIdx}-${rIdx}`;
@@ -592,20 +622,38 @@ function buildRowGroups({
           (tempStr && pinnedTemps.has(tempStr)) || pinnedRows.has(rKey);
 
         // Include row if it's pinned, or if no specific rows/temps are pinned at all (whole pinned block)
-        const hasAnyRowPin = pinnedTemps.size > 0 || pinnedRows.size > 0;
         if (isRowPinned || !hasAnyRowPin) {
-          matchingRows.push({
-            rowKey: rKey,
-            cells: {
-              T: row.isSaturationState ? 'Sat.' : formatTempDisplay(row.T),
-              v: row.v.s,
-              u: row.u.s,
-              h: row.h.s,
-              s: row.s.s,
+          sortedItems.push({
+            sortPos: rIdx,
+            row: {
+              rowKey: rKey,
+              cells: {
+                T: row.isSaturationState ? 'Sat.' : formatTempDisplay(row.T),
+                v: row.v.s,
+                u: row.u.s,
+                h: row.h.s,
+                s: row.s.s,
+              },
             },
           });
         }
       });
+
+      for (const solved of interpolatedRows) {
+        if (solved.spec.blockIndex !== bIdx || !solved.isValidInput) continue;
+        if (!pinnedRows.has(solved.spec.id) && hasAnyRowPin) continue;
+        const cells: Record<string, string> = {};
+        for (const [colId, cell] of Object.entries(solved.cells)) {
+          cells[colId] = cell.display;
+        }
+        sortedItems.push({
+          sortPos: solved.spec.afterIndex + 0.5,
+          row: { rowKey: solved.spec.id, cells },
+        });
+      }
+
+      sortedItems.sort((a, b) => a.sortPos - b.sortPos);
+      const matchingRows = sortedItems.map((i) => i.row);
 
       if (matchingRows.length > 0) {
         const satPart =
@@ -621,56 +669,30 @@ function buildRowGroups({
   }
 
   if (tableData.type === 'ideal_gas_air') {
-    const sortedRowIndices = Array.from(pinnedRows)
-      .map((k) => parseInt(k, 10))
-      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
-      .sort((a, b) => a - b);
-
-    if (sortedRowIndices.length === 0) return [];
-
-    return [
-      {
-        rows: sortedRowIndices.map((idx) => {
-          const row: IdealGasAirRow = tableData.rows[idx];
-          return {
-            rowKey: idx.toString(),
-            cells: {
-              T: formatTempFromKDisplay(row.T),
-              h: row.h.s,
-              u: row.u.s,
-              s_deg: row.s_deg.s,
-              s_plus: row.s_plus?.s || '-',
-            },
-          };
-        }),
-      },
-    ];
+    const rows = mergePinnedFlatRows(tableData.rows.length, pinnedRows, interpolatedRows, (idx) => {
+      const row: IdealGasAirRow = tableData.rows[idx];
+      return {
+        T: formatTempFromKDisplay(row.T),
+        h: row.h.s,
+        u: row.u.s,
+        s_deg: row.s_deg.s,
+        s_plus: row.s_plus?.s || '-',
+      };
+    });
+    return rows.length === 0 ? [] : [{ rows }];
   }
 
   if (tableData.type === 'ideal_gas_molar') {
-    const sortedRowIndices = Array.from(pinnedRows)
-      .map((k) => parseInt(k, 10))
-      .filter((n) => !isNaN(n) && n >= 0 && n < tableData.rows.length)
-      .sort((a, b) => a - b);
-
-    if (sortedRowIndices.length === 0) return [];
-
-    return [
-      {
-        rows: sortedRowIndices.map((idx) => {
-          const row: IdealGasMolarRow = tableData.rows[idx];
-          return {
-            rowKey: idx.toString(),
-            cells: {
-              T: formatTempFromKDisplay(row.T),
-              h_bar: row.h_bar.s,
-              u_bar: row.u_bar.s,
-              s_bar_deg: row.s_bar_deg.s,
-            },
-          };
-        }),
-      },
-    ];
+    const rows = mergePinnedFlatRows(tableData.rows.length, pinnedRows, interpolatedRows, (idx) => {
+      const row: IdealGasMolarRow = tableData.rows[idx];
+      return {
+        T: formatTempFromKDisplay(row.T),
+        h_bar: row.h_bar.s,
+        u_bar: row.u_bar.s,
+        s_bar_deg: row.s_bar_deg.s,
+      };
+    });
+    return rows.length === 0 ? [] : [{ rows }];
   }
 
   return [];
@@ -721,15 +743,16 @@ function getRowBadgeLabel(
 ): string {
   if (!tableData) return `Row ${row.rowKey}`;
   const tUnit = tempUnit === 'K' ? 'K' : '°C';
+  const prefix = row.rowKey.startsWith('interp-') ? 'Interp: ' : '';
   if (tableData.type === 'superheated' || tableData.type === 'compressed') {
     if (row.cells.T === 'Sat.') return 'Sat.';
-    return row.cells.T ? `T = ${row.cells.T} ${tUnit}` : `Row ${row.rowKey}`;
+    return row.cells.T ? `${prefix}T = ${row.cells.T} ${tUnit}` : `Row ${row.rowKey}`;
   }
   if (tableData.type === 'saturated') {
     if (tableData.indexProperty === 'T') {
-      return `T = ${row.cells.T} ${tUnit}${row.cells.P ? ` (${row.cells.P} ${pressUnit})` : ''}`;
+      return `${prefix}T = ${row.cells.T} ${tUnit}${row.cells.P ? ` (${row.cells.P} ${pressUnit})` : ''}`;
     } else {
-      return `P = ${row.cells.P} ${pressUnit}${row.cells.T ? ` (${row.cells.T} ${tUnit})` : ''}`;
+      return `${prefix}P = ${row.cells.P} ${pressUnit}${row.cells.T ? ` (${row.cells.T} ${tUnit})` : ''}`;
     }
   }
   if (
@@ -737,7 +760,7 @@ function getRowBadgeLabel(
     tableData.type === 'ideal_gas_molar' ||
     tableData.type === 'specific_heat_temp'
   ) {
-    return row.cells.T ? `T = ${row.cells.T} ${tUnit}` : `Row ${row.rowKey}`;
+    return row.cells.T ? `${prefix}T = ${row.cells.T} ${tUnit}` : `Row ${row.rowKey}`;
   }
   if (
     tableData.type === 'critical_properties' ||
@@ -1000,6 +1023,7 @@ function SnippetModalDialog({
   touchedBlocks,
   disabledBlocks,
   selectedCols,
+  interpolatedRows = [],
   onClearAllSelections,
 }: SnippetModalProps) {
   const formatTempDisplay = useCallback(
@@ -1086,6 +1110,7 @@ function SnippetModalDialog({
       pinnedTemps,
       activeBlockIdxs: initialBlockIdxs,
       allColumns,
+      interpolatedRows,
       formatTempDisplay,
       formatTempFromKDisplay,
       formatPressDisplay,
@@ -1104,6 +1129,7 @@ function SnippetModalDialog({
       pinnedTemps,
       activeBlockIdxs,
       allColumns,
+      interpolatedRows,
       formatTempDisplay,
       formatTempFromKDisplay,
       formatPressDisplay,
@@ -1117,6 +1143,7 @@ function SnippetModalDialog({
     pinnedTemps,
     activeBlockIdxs,
     allColumns,
+    interpolatedRows,
     formatTempDisplay,
     formatTempFromKDisplay,
     formatPressDisplay,

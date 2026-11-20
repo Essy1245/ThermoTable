@@ -10,11 +10,19 @@ import type {
   LiquidPropertiesRow,
   SolidPropertiesRow,
 } from './data/types';
-import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X, Pin, Crop } from 'lucide-react';
+import { Info, Highlighter, Search, ChevronDown, ChevronRight, Layers, Check, X, Pin, Crop, Plus, Menu } from 'lucide-react';
 import { clsx, type ClassValue } from 'clsx';
 import { twMerge } from 'tailwind-merge';
 import { SnippetModal } from './snippet/SnippetModal';
 import { getJumpOptions, findNearestRow } from './jump';
+import { InterpolatedRowGroup, ActionMenuModal, type VisibleTableCol } from './InterpolatedRows';
+import {
+  isProgressiveTable,
+  getProgressiveColumns,
+  solveInterpolatedRow,
+  findBoundingRowGap,
+  type InterpolatedRowSpec,
+} from './interpolation';
 
 function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -107,25 +115,80 @@ const A2B_GAS_GROUPS = [
   { id: 'o2', label: 'Oxygen, O₂', short: 'O₂' },
 ] as const;
 
-const ISOBAR_PROPERTY_COLUMNS = [
-  { id: 'v', label: 'v' },
-  { id: 'u', label: 'u' },
-  { id: 'h', label: 'h' },
-  { id: 's', label: 's' },
-];
+interface PropertyColumnDef {
+  id: string;
+  label: string;
+}
 
-const IDEAL_AIR_PROPERTY_COLUMNS = [
-  { id: 'h', label: 'h' },
-  { id: 'u', label: 'u' },
-  { id: 's_deg', label: 's°' },
-  { id: 's_plus', label: 's⁺' },
-];
+const PROPERTY_COLUMNS_BY_TYPE: Record<string, PropertyColumnDef[]> = {
+  superheated: [
+    { id: 'v', label: 'v' },
+    { id: 'u', label: 'u' },
+    { id: 'h', label: 'h' },
+    { id: 's', label: 's' },
+  ],
+  compressed: [
+    { id: 'v', label: 'v' },
+    { id: 'u', label: 'u' },
+    { id: 'h', label: 'h' },
+    { id: 's', label: 's' },
+  ],
+  ideal_gas_air: [
+    { id: 'h', label: 'h' },
+    { id: 'u', label: 'u' },
+    { id: 's_deg', label: 's°' },
+    { id: 's_plus', label: 's⁺' },
+  ],
+  ideal_gas_molar: [
+    { id: 'h_bar', label: 'h̄' },
+    { id: 'u_bar', label: 'ū' },
+    { id: 's_bar_deg', label: 's̄°' },
+  ],
+  critical_properties: [
+    { id: 'formula', label: 'Formula' },
+    { id: 'M', label: 'M' },
+    { id: 'R', label: 'R' },
+    { id: 'T_cr', label: 'T_cr' },
+    { id: 'P_cr', label: 'P_cr' },
+    { id: 'v_cr', label: 'v_cr' },
+  ],
+  specific_heat_300k: [
+    { id: 'formula', label: 'Formula' },
+    { id: 'R', label: 'R' },
+    { id: 'cp', label: 'cp' },
+    { id: 'cv', label: 'cv' },
+    { id: 'k', label: 'k' },
+  ],
+  specific_heat_poly: [
+    { id: 'formula', label: 'Formula' },
+    { id: 'a', label: 'a' },
+    { id: 'b', label: 'b' },
+    { id: 'c', label: 'c' },
+    { id: 'd', label: 'd' },
+    { id: 'tempRange', label: 'Temp. Range' },
+    { id: 'errorMax', label: 'Max. Error' },
+    { id: 'errorAvg', label: 'Avg. Error' },
+  ],
+  solids: [
+    { id: 'category', label: 'Category' },
+    { id: 'T', label: 'Temp.' },
+    { id: 'rho', label: 'Density, ρ' },
+    { id: 'cp', label: 'cp' },
+  ],
+  foods: [
+    { id: 'waterContent', label: 'Water Content' },
+    { id: 'T_freeze', label: 'Freezing Point' },
+    { id: 'cp_above', label: 'cp Above' },
+    { id: 'cp_below', label: 'cp Below' },
+    { id: 'h_if', label: 'h_if' },
+  ],
+};
 
-const IDEAL_MOLAR_PROPERTY_COLUMNS = [
-  { id: 'h_bar', label: 'h̄' },
-  { id: 'u_bar', label: 'ū' },
-  { id: 's_bar_deg', label: 's̄°' },
-];
+const LIQUID_GROUPS = [
+  { id: 'liq_boil', label: 'Boiling Data at 1 atm', cols: ['T_boil', 'h_fg'] },
+  { id: 'liq_freeze', label: 'Freezing Data', cols: ['T_freeze', 'h_if'] },
+  { id: 'liq_props', label: 'Liquid Properties', cols: ['T_liq', 'rho', 'cp'] },
+] as const;
 
 const TABLE_NOTES: Record<string, string> = {
   'A-1': 'R = Rᵤ/M, where Rᵤ = 8.31447 kJ/(kmol·K). The units kJ/(kg·K) and kPa·m³/(kg·K) are equivalent. Sources: Kobe and Lynn (1953); ASHRAE Handbook of Fundamentals (1993).',
@@ -300,13 +363,61 @@ export default function App() {
   const [currentTableId, setCurrentTableId] = useState<string>('A-4');
   const [isSwitcherOpen, setIsSwitcherOpen] = useState<boolean>(false);
   const [isSnippetOpen, setIsSnippetOpen] = useState<boolean>(false);
+  const [isDescOpen, setIsDescOpen] = useState<boolean>(false);
+  const [actionModalMode, setActionModalMode] = useState<'mobile' | 'interpolate' | null>(null);
   const [tableSearchQuery, setTableSearchQuery] = useState<string>('');
 
   const currentTable = SUPPORTED_TABLES.find(t => t.id === currentTableId) || SUPPORTED_TABLES[0];
   const tableData = useMemo(() => getTableData(currentTableId), [currentTableId]);
 
-  const [tempUnit, setTempUnit] = useState<TempUnit>('C');
-  const [pressUnit, setPressUnit] = useState<PressUnit>('kPa');
+  const [tempUnit, setRawTempUnit] = useState<TempUnit>('C');
+  const [pressUnit, setRawPressUnit] = useState<PressUnit>('kPa');
+  const [tableInterpolatedRows, setTableInterpolatedRows] = useState<Record<string, InterpolatedRowSpec[]>>({});
+
+  const setTempUnit = useCallback((nextUnit: TempUnit) => {
+    setRawTempUnit(prevUnit => {
+      if (prevUnit !== nextUnit) {
+        setTableInterpolatedRows(prevMap => {
+          const list = prevMap[currentTableId];
+          if (!list || list.length === 0) return prevMap;
+          let changed = false;
+          const nextList = list.map(spec => {
+            if (spec.dominatingColId !== 'T' || !spec.inputValue.trim()) return spec;
+            const n = Number(spec.inputValue.trim().replace(/,/g, '').replace(/−/g, '-'));
+            if (!Number.isFinite(n)) return spec;
+            changed = true;
+            const converted = prevUnit === 'C' && nextUnit === 'K' ? n + 273.15 : n - 273.15;
+            return { ...spec, inputValue: Number(converted.toPrecision(12)).toString() };
+          });
+          return changed ? { ...prevMap, [currentTableId]: nextList } : prevMap;
+        });
+      }
+      return nextUnit;
+    });
+  }, [currentTableId]);
+
+  const setPressUnit = useCallback((nextUnit: PressUnit) => {
+    setRawPressUnit(prevUnit => {
+      if (prevUnit !== nextUnit) {
+        const kpaScale: Record<PressUnit, number> = { kPa: 1, bar: 100, MPa: 1000 };
+        setTableInterpolatedRows(prevMap => {
+          const list = prevMap[currentTableId];
+          if (!list || list.length === 0) return prevMap;
+          let changed = false;
+          const nextList = list.map(spec => {
+            if (spec.dominatingColId !== 'P' || !spec.inputValue.trim()) return spec;
+            const n = Number(spec.inputValue.trim().replace(/,/g, '').replace(/−/g, '-'));
+            if (!Number.isFinite(n)) return spec;
+            changed = true;
+            const converted = (n * kpaScale[prevUnit]) / kpaScale[nextUnit];
+            return { ...spec, inputValue: Number(converted.toPrecision(12)).toString() };
+          });
+          return changed ? { ...prevMap, [currentTableId]: nextList } : prevMap;
+        });
+      }
+      return nextUnit;
+    });
+  }, [currentTableId]);
 
   const [visibleCols, setVisibleCols] = useState<Record<string, boolean>>({
     volume: true,
@@ -358,7 +469,7 @@ export default function App() {
     setHoveredRow(prev => (prev !== null ? null : prev));
   }, []);
   const handleRootMouseMove = useCallback((e: React.MouseEvent) => {
-    if (isSnippetOpen || isSwitcherOpen) {
+    if (isSnippetOpen || isSwitcherOpen || actionModalMode !== null) {
       clearAllHover();
       return;
     }
@@ -378,7 +489,7 @@ export default function App() {
     const nextRow = rowEl ? rowEl.getAttribute('data-row-key') : null;
     setHoveredCol(prev => (prev === nextCol ? prev : nextCol));
     setHoveredRow(prev => (prev === nextRow ? prev : nextRow));
-  }, [clearAllHover, isSnippetOpen, isSwitcherOpen]);
+  }, [clearAllHover, isSnippetOpen, isSwitcherOpen, actionModalMode]);
 
   useEffect(() => {
     const handleDocLeave = () => {
@@ -440,12 +551,37 @@ export default function App() {
   const collapsedBlocks = useMemo(() => tableCollapsedBlocks[currentTableId] || new Set<number>(), [tableCollapsedBlocks, currentTableId]);
   const disabledBlocks = useMemo(() => tableDisabledBlocks[currentTableId] || new Set<number>(), [tableDisabledBlocks, currentTableId]);
 
+  const isProgressive = useMemo(() => isProgressiveTable(tableData), [tableData]);
+  const progressiveCols = useMemo(
+    () => (tableData ? getProgressiveColumns(tableData, tempUnit, pressUnit) : []),
+    [tableData, tempUnit, pressUnit]
+  );
+  const interpolatedRows = useMemo(
+    () => tableInterpolatedRows[currentTableId] || [],
+    [tableInterpolatedRows, currentTableId]
+  );
+  const solvedInterpolatedRows = useMemo(
+    () =>
+      tableData
+        ? interpolatedRows.map((spec) => solveInterpolatedRow(tableData, spec, tempUnit, pressUnit))
+        : [],
+    [tableData, interpolatedRows, tempUnit, pressUnit]
+  );
+
   const activeSnippetRowCount = useMemo(() => {
-    if (tableData?.type === 'superheated' || tableData?.type === 'compressed') {
-      return pinnedTemps.size + pinnedRows.size + (pinnedTemps.size === 0 && pinnedRows.size === 0 ? pinnedBlocks.size : 0);
+    let typicalPinnedCount = 0;
+    for (const k of pinnedRows) {
+      if (!k.startsWith('interp-')) typicalPinnedCount++;
     }
-    return pinnedRows.size;
-  }, [tableData, pinnedTemps, pinnedRows, pinnedBlocks]);
+    const validInterpPinnedCount = solvedInterpolatedRows.filter(
+      (s) => s.isValidInput && pinnedRows.has(s.spec.id)
+    ).length;
+    const totalRowPins = typicalPinnedCount + validInterpPinnedCount;
+    if (tableData?.type === 'superheated' || tableData?.type === 'compressed') {
+      return pinnedTemps.size + totalRowPins + (pinnedTemps.size === 0 && totalRowPins === 0 ? pinnedBlocks.size : 0);
+    }
+    return totalRowPins;
+  }, [tableData, pinnedTemps, pinnedRows, pinnedBlocks, solvedInterpolatedRows]);
 
   const clearCurrentTableSelections = useCallback(() => {
     setTablePinnedRows(prev => ({ ...prev, [currentTableId]: new Set<string>() }));
@@ -463,21 +599,21 @@ export default function App() {
     });
   };
 
-  const setCollapsedBlocks = (action: Set<number> | ((prev: Set<number>) => Set<number>)) => {
+  const setCollapsedBlocks = useCallback((action: Set<number> | ((prev: Set<number>) => Set<number>)) => {
     setTableCollapsedBlocks(prev => {
       const current = prev[currentTableId] || new Set<number>();
       const next = typeof action === 'function' ? action(current) : action;
       return { ...prev, [currentTableId]: next };
     });
-  };
+  }, [currentTableId]);
 
-  const setDisabledBlocks = (action: Set<number> | ((prev: Set<number>) => Set<number>)) => {
+  const setDisabledBlocks = useCallback((action: Set<number> | ((prev: Set<number>) => Set<number>)) => {
     setTableDisabledBlocks(prev => {
       const current = prev[currentTableId] || new Set<number>();
       const next = typeof action === 'function' ? action(current) : action;
       return { ...prev, [currentTableId]: next };
     });
-  };
+  }, [currentTableId]);
 
   const [jumpProperty, setJumpProperty] = useState<string>('T');
   const [jumpValue, setJumpValue] = useState<string>('');
@@ -494,18 +630,177 @@ export default function App() {
   const [menuSelectedIndex, setMenuSelectedIndex] = useState<number>(0);
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
 
+  const findRowEl = useCallback((key: string): HTMLTableRowElement | null => {
+    const cached = rowRefs.current[key];
+    if (cached && cached.isConnected) return cached;
+    return (tableRef.current?.querySelector(`tr[data-row-key="${CSS.escape(key)}"]`) as HTMLTableRowElement | null) ?? null;
+  }, []);
+
   useEffect(() => {
     tableRef.current?.scrollTo({ top: 0, left: 0 });
   }, [currentTableId]);
+
+  const unhideColumnIfHidden = useCallback((colId: string) => {
+    if (!tableData) return;
+    if (tableData.type === 'saturated') {
+      const group = ['vf', 'vg'].includes(colId) ? 'volume'
+        : ['uf', 'ufg', 'ug'].includes(colId) ? 'energy'
+        : ['hf', 'hfg', 'hg'].includes(colId) ? 'enthalpy'
+        : ['sf', 'sfg', 'sg'].includes(colId) ? 'entropy' : null;
+      if (group) setVisibleCols(previous => previous[group] ? previous : { ...previous, [group]: true });
+    } else if (tableData.type === 'specific_heat_temp' && colId.includes('_')) {
+      const gas = colId.split('_')[0];
+      const key = `gas_${gas}`;
+      setVisibleCols(previous => previous[key] === false ? { ...previous, [key]: true } : previous);
+    } else if (currentPropertyVisibility?.[`property_${colId}`] === false) {
+      setTablePropertyVisibility(previous => ({
+        ...previous,
+        [currentTableId]: { ...previous[currentTableId], [`property_${colId}`]: true },
+      }));
+    }
+  }, [tableData, currentPropertyVisibility, currentTableId]);
+
+  const updateInterpSpec = useCallback((id: string, updater: (spec: InterpolatedRowSpec) => InterpolatedRowSpec) => {
+    setTableInterpolatedRows(prev => {
+      const list = prev[currentTableId] || [];
+      return {
+        ...prev,
+        [currentTableId]: list.map(s => (s.id === id ? updater(s) : s)),
+      };
+    });
+  }, [currentTableId]);
+
+  const handleAddInterpolatedRow = useCallback((params: {
+    blockIndex?: number;
+    afterIndex: number;
+    dominatingColId: string;
+    inputValue: string;
+  }) => {
+    const id = `interp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newSpec: InterpolatedRowSpec = {
+      id,
+      blockIndex: params.blockIndex,
+      afterIndex: params.afterIndex,
+      dominatingColId: params.dominatingColId,
+      inputValue: params.inputValue,
+      showMoreDigits: false,
+      showAnalytic: false,
+    };
+    setTableInterpolatedRows(prev => ({
+      ...prev,
+      [currentTableId]: [...(prev[currentTableId] || []), newSpec],
+    }));
+    // Auto-pin the newly added interpolated row so it appears in generated snippets
+    setTablePinnedRows(prev => {
+      const current = prev[currentTableId] || new Set<string>();
+      const next = new Set(current);
+      next.add(id);
+      return { ...prev, [currentTableId]: next };
+    });
+    if (params.blockIndex !== undefined) {
+      const bIdx = params.blockIndex;
+      setTableTouchedBlocks(prev => {
+        const current = prev[currentTableId] || new Set<number>();
+        const next = new Set(current);
+        next.add(bIdx);
+        return { ...prev, [currentTableId]: next };
+      });
+      if (disabledBlocks.has(bIdx)) {
+        setDisabledBlocks(prev => {
+          const next = new Set(prev);
+          next.delete(bIdx);
+          return next;
+        });
+      }
+      if (collapsedBlocks.has(bIdx)) {
+        setCollapsedBlocks(prev => {
+          const next = new Set(prev);
+          next.delete(bIdx);
+          return next;
+        });
+      }
+    }
+    unhideColumnIfHidden(params.dominatingColId);
+    setHighlightedRowIndex(id);
+    setTimeout(() => setHighlightedRowIndex(prev => (prev === id ? null : prev)), 2000);
+    requestAnimationFrame(() => {
+      const rowEl = findRowEl(id);
+      rowEl?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+      if (!params.inputValue) {
+        const inputEl = rowEl?.querySelector('input');
+        inputEl?.focus();
+      }
+    });
+  }, [currentTableId, disabledBlocks, collapsedBlocks, setDisabledBlocks, setCollapsedBlocks, unhideColumnIfHidden, findRowEl]);
+
+  const handleUpdateInterpInput = useCallback((id: string, value: string) => {
+    updateInterpSpec(id, s => ({ ...s, inputValue: value }));
+  }, [updateInterpSpec]);
+
+  const handleSelectDominatingCol = useCallback((id: string, colId: string, prefill?: string) => {
+    updateInterpSpec(id, s => ({
+      ...s,
+      dominatingColId: colId,
+      inputValue: prefill !== undefined ? prefill : s.inputValue,
+    }));
+    requestAnimationFrame(() => {
+      const rowEl = findRowEl(id);
+      const inputEl = rowEl?.querySelector('input');
+      inputEl?.focus();
+    });
+  }, [updateInterpSpec, findRowEl]);
+
+  const handleDeleteInterpRow = useCallback((id: string) => {
+    setTableInterpolatedRows(prev => ({
+      ...prev,
+      [currentTableId]: (prev[currentTableId] || []).filter(s => s.id !== id),
+    }));
+    setTablePinnedRows(prev => {
+      const current = prev[currentTableId];
+      if (!current?.has(id)) return prev;
+      const next = new Set(current);
+      next.delete(id);
+      return { ...prev, [currentTableId]: next };
+    });
+  }, [currentTableId]);
+
+  const handleToggleMoreDigits = useCallback((id: string) => {
+    updateInterpSpec(id, s => ({ ...s, showMoreDigits: !s.showMoreDigits }));
+  }, [updateInterpSpec]);
+
+  const handleToggleAnalytic = useCallback((id: string) => {
+    updateInterpSpec(id, s => ({ ...s, showAnalytic: !s.showAnalytic }));
+  }, [updateInterpSpec]);
+
+  const handleRelocateInterpRow = useCallback((id: string) => {
+    if (!tableData) return;
+    const solved = solvedInterpolatedRows.find(s => s.spec.id === id);
+    if (!solved?.isValidInput || solved.inputNumber === undefined) return;
+    const nextGap = findBoundingRowGap(
+      tableData,
+      solved.spec.dominatingColId,
+      solved.inputNumber,
+      tempUnit,
+      pressUnit,
+      solved.spec.blockIndex
+    );
+    if (nextGap < 0) return;
+    updateInterpSpec(id, s => ({ ...s, afterIndex: nextGap }));
+    setHighlightedRowIndex(id);
+    setTimeout(() => setHighlightedRowIndex(prev => (prev === id ? null : prev)), 2000);
+    requestAnimationFrame(() => {
+      findRowEl(id)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
+    });
+  }, [tableData, solvedInterpolatedRows, tempUnit, pressUnit, updateInterpSpec, findRowEl]);
 
   const switchTable = (id: string) => {
     clearAllHover();
     setCurrentTableId(id);
     const targetData = getTableData(id);
     if (targetData && (targetData.type === 'superheated' || targetData.type === 'compressed')) {
-      setPressUnit('MPa');
+      setRawPressUnit('MPa');
       setJumpSuperheatedUnit('MPa');
-      setTempUnit('C');
+      setRawTempUnit('C');
       setJumpProperty('T');
     } else if (
       targetData &&
@@ -513,30 +808,31 @@ export default function App() {
         targetData.type === 'ideal_gas_molar' ||
         targetData.type === 'specific_heat_temp')
     ) {
-      setTempUnit('K');
+      setRawTempUnit('K');
       setJumpProperty('T');
     } else if (targetData && targetData.type === 'critical_properties') {
-      setTempUnit('K');
-      setPressUnit('MPa');
+      setRawTempUnit('K');
+      setRawPressUnit('MPa');
       setJumpProperty('substance');
     } else if (
       targetData &&
       (targetData.type === 'specific_heat_300k' || targetData.type === 'specific_heat_poly')
     ) {
-      setTempUnit('K');
+      setRawTempUnit('K');
       setJumpProperty('substance');
     } else if (
       targetData &&
       (targetData.type === 'liquids' || targetData.type === 'solids' || targetData.type === 'foods')
     ) {
-      setTempUnit('C');
+      setRawTempUnit('C');
       setJumpProperty('substance');
     } else {
-      setPressUnit('kPa');
-      setTempUnit('C');
+      setRawPressUnit('kPa');
+      setRawTempUnit('C');
       setJumpProperty(targetData?.type === 'saturated' ? targetData.indexProperty : 'T');
     }
     setShowBlockFilter(false);
+    setActionModalMode(null);
     setHighlightedRowIndex(null);
     setHighlightedBlockIdx(null);
     setIsSwitcherOpen(false);
@@ -558,8 +854,11 @@ export default function App() {
     for (const s of Object.values(tablePinnedBlocks)) {
       if (s && s.size > 0) return true;
     }
+    for (const list of Object.values(tableInterpolatedRows)) {
+      if (list && list.length > 0) return true;
+    }
     return false;
-  }, [tableSelectedCols, tablePinnedTemps, tablePinnedRows, tablePinnedBlocks]);
+  }, [tableSelectedCols, tablePinnedTemps, tablePinnedRows, tablePinnedBlocks, tableInterpolatedRows]);
 
   useEffect(() => {
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
@@ -598,13 +897,18 @@ export default function App() {
 
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && actionModalMode !== null) {
+        setActionModalMode(null);
+        return;
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
         e.preventDefault();
         jumpInputRef.current?.focus();
       }
       
       if (e.key === 'Tab') {
-        if (isSnippetOpen) return;
+        if (isSnippetOpen || actionModalMode !== null) return;
         const target = e.target as HTMLElement;
         if (target.tagName !== 'INPUT' && target.tagName !== 'SELECT' && target.tagName !== 'TEXTAREA') {
           e.preventDefault();
@@ -615,7 +919,7 @@ export default function App() {
     
     document.addEventListener('keydown', handleGlobalKeyDown);
     return () => document.removeEventListener('keydown', handleGlobalKeyDown);
-  }, [isSnippetOpen]);
+  }, [isSnippetOpen, actionModalMode]);
 
   const formatTempDisplay = (val?: ThermoValue) => {
     if (!val) return '-';
@@ -777,19 +1081,25 @@ export default function App() {
       const gas = columnId.split('_')[0];
       const key = `gas_${gas}`;
       setVisibleCols(previous => previous[key] === false ? { ...previous, [key]: true } : previous);
-    } else if (tableData.type === 'ideal_gas_air' || tableData.type === 'ideal_gas_molar') {
-      if (!isPropertyVisible(columnId)) {
+    } else if (tableData.type === 'liquids') {
+      const group = LIQUID_GROUPS.find(g => (g.cols as readonly string[]).includes(columnId))?.id;
+      if (group && !isPropertyVisible(group)) {
         setTablePropertyVisibility(previous => ({
           ...previous,
-          [currentTableId]: { ...previous[currentTableId], [`property_${columnId}`]: true },
+          [currentTableId]: { ...previous[currentTableId], [`property_${group}`]: true },
         }));
       }
+    } else if (!isPropertyVisible(columnId)) {
+      setTablePropertyVisibility(previous => ({
+        ...previous,
+        [currentTableId]: { ...previous[currentTableId], [`property_${columnId}`]: true },
+      }));
     }
 
     const key = targetIndex.toString();
     setHighlightedRowIndex(key);
     requestAnimationFrame(() => {
-      const row = rowRefs.current[key];
+      const row = findRowEl(key);
       const cell = row?.querySelector<HTMLElement>(`[data-col-id="${columnId}"]`);
       (cell || row)?.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'nearest' });
     });
@@ -868,13 +1178,12 @@ export default function App() {
   const activeA2bGases = A2B_GAS_GROUPS.filter(g => visibleCols[`gas_${g.id}`] !== false);
   const collapsedA2bGases = A2B_GAS_GROUPS.filter(g => visibleCols[`gas_${g.id}`] === false);
 
-  const propertyColumns = tableData?.type === 'superheated' || tableData?.type === 'compressed'
-    ? ISOBAR_PROPERTY_COLUMNS
-    : tableData?.type === 'ideal_gas_air'
-      ? IDEAL_AIR_PROPERTY_COLUMNS
-      : tableData?.type === 'ideal_gas_molar'
-        ? IDEAL_MOLAR_PROPERTY_COLUMNS
-        : [];
+  const propertyColumns = tableData ? (PROPERTY_COLUMNS_BY_TYPE[tableData.type] ?? []) : [];
+  const collapsedPropertyColumns = propertyColumns.filter(c => !isPropertyVisible(c.id));
+
+  const activeLiquidGroups = LIQUID_GROUPS.filter(g => isPropertyVisible(g.id));
+  const collapsedLiquidGroups = LIQUID_GROUPS.filter(g => !isPropertyVisible(g.id));
+
   const tableNote = (tableData?.type === 'liquids' || tableData?.type === 'foods')
     ? tableData.footnote
     : TABLE_NOTES[currentTableId];
@@ -912,6 +1221,49 @@ export default function App() {
     }
   };
 
+  const renderCollapsedPropertyHeaders = (rowSpan: number = 1) => {
+    if (collapsedPropertyColumns.length === 0) return null;
+    return (
+      <>
+        <th rowSpan={rowSpan} className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 w-full" />
+        {collapsedPropertyColumns.map(c => (
+          <th
+            key={c.id}
+            rowSpan={rowSpan}
+            className="w-8 sm:w-9 bg-gray-100 hover:bg-gray-200 dark:bg-gray-900 dark:hover:bg-gray-800 border-b border-gray-200 dark:border-gray-800 border-l-2 border-l-gray-300 dark:border-l-gray-700 sticky top-0 z-20 transition-colors cursor-pointer"
+            onClick={() => togglePropertyVisibility(c.id)}
+            title={`Expand ${c.label}`}
+          >
+            <div className="h-full flex items-center justify-center py-2">
+              <span className="[writing-mode:vertical-rl] text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider select-none">
+                {c.label}
+              </span>
+            </div>
+          </th>
+        ))}
+      </>
+    );
+  };
+
+  const renderCollapsedPropertyCells = (rowIdx: number, totalRows: number) => {
+    if (collapsedPropertyColumns.length === 0) return null;
+    return (
+      <>
+        <td className="bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-0" />
+        {rowIdx === 0 &&
+          collapsedPropertyColumns.map(c => (
+            <td
+              key={c.id}
+              rowSpan={totalRows}
+              onClick={() => togglePropertyVisibility(c.id)}
+              title={`Expand ${c.label}`}
+              className="bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-800/80 border-l-2 border-l-gray-300 dark:border-l-gray-700 border-b-0 p-0 cursor-pointer transition-colors"
+            />
+          ))}
+      </>
+    );
+  };
+
   const renderColHeader = (
     id: string,
     label: string,
@@ -923,6 +1275,7 @@ export default function App() {
     const isSelected = selectedCols.has(id);
     const isHovered = hoveredCol === id;
     const resolvedUnitType = unitType || (id === 'T' ? 'temp' : undefined);
+    const isCollapsible = propertyColumns.some(c => c.id === id);
 
     return (
       <th
@@ -942,6 +1295,17 @@ export default function App() {
       >
         <div className="flex flex-col justify-center h-full gap-1.5 sm:gap-2 w-full">
           <div className="flex items-center gap-1">
+            {isCollapsible && (
+              <input
+                type="checkbox"
+                checked={true}
+                onChange={() => togglePropertyVisibility(id)}
+                onClick={e => e.stopPropagation()}
+                aria-label={`Hide ${label} column`}
+                title={`Hide ${label} column`}
+                className="w-3.5 h-3.5 rounded border-gray-300 dark:border-gray-600 text-[#c13726] accent-[#c13726] cursor-pointer shrink-0"
+              />
+            )}
             <span className="font-semibold text-xs text-gray-700 dark:text-gray-200">{label}</span>
             {resolvedUnitType === 'temp' ? (
               <select
@@ -1019,6 +1383,226 @@ export default function App() {
     }
   };
 
+  const renderProgressivePinCell = (
+    onTogglePin: () => void,
+    pinTitle: string,
+    isPinned: boolean,
+    isHighlighted: boolean,
+    isHovered: boolean,
+    canInsertBelow: boolean,
+    onAddBelow: () => void,
+    compact: boolean = false,
+    addTitle: string = 'Insert interpolated row below'
+  ) => (
+    <td
+      data-pin-cell="true"
+      onClick={onTogglePin}
+      className={cn(
+        "w-14 min-w-[56px] px-1 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 transition-colors cursor-pointer",
+        compact ? "py-1.5" : "py-2",
+        isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
+        isHighlighted && "bg-indigo-200 dark:bg-[#23254b] border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20"
+      )}
+      title={pinTitle}
+    >
+      <div className="flex items-center justify-center gap-0.5">
+        <button
+          type="button"
+          onClick={(e) => { e.stopPropagation(); onTogglePin(); }}
+          className={cn(
+            "p-1 rounded transition-colors cursor-pointer",
+            isPinned
+              ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30 shadow-sm"
+              : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700",
+            isHovered && !isPinned && "text-gray-500 dark:text-gray-300"
+          )}
+          title={pinTitle}
+        >
+          <Highlighter className="w-3.5 h-3.5" />
+        </button>
+        {canInsertBelow && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onAddBelow(); }}
+            className="p-0.5 rounded text-emerald-600/80 dark:text-emerald-400/80 hover:text-emerald-700 dark:hover:text-emerald-200 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 transition-colors cursor-pointer"
+            title={addTitle}
+            aria-label={addTitle}
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+    </td>
+  );
+
+  const tUnitLabel = tempUnit === 'K' ? 'K' : '°C';
+  const countInterpTrs = (rowCount: number, blockIdx?: number) =>
+    solvedInterpolatedRows.filter(
+      s => s.spec.blockIndex === blockIdx && s.spec.afterIndex >= 0 && s.spec.afterIndex < rowCount - 1
+    ).length * 2;
+
+  const saturatedVisibleCols: VisibleTableCol[] = tableData?.type === 'saturated'
+    ? [
+        ...(tableData.indexProperty === 'T'
+          ? [
+              { id: 'T', label: `T (${tUnitLabel})` },
+              { id: 'P', label: `Psat (${pressUnit})`, isCategoryEnd: true },
+            ]
+          : [
+              { id: 'P', label: `P (${pressUnit})` },
+              { id: 'T', label: `Tsat (${tUnitLabel})`, isCategoryEnd: true },
+            ]),
+        ...activeCategories.flatMap((c) =>
+          c.cols.map((col, colIdx) => ({
+            id: col.id,
+            label: col.label,
+            isCategoryEnd: colIdx === c.cols.length - 1,
+          }))
+        ),
+      ]
+    : [];
+
+  const airVisibleCols: VisibleTableCol[] = tableData?.type === 'ideal_gas_air'
+    ? [
+        { id: 'T', label: `Temp (${tUnitLabel})` },
+        ...(isPropertyVisible('h') ? [{ id: 'h', label: 'h (kJ/kg)' }] : []),
+        ...(isPropertyVisible('u') ? [{ id: 'u', label: 'u (kJ/kg)' }] : []),
+        ...(isPropertyVisible('s_deg') ? [{ id: 's_deg', label: 's° (kJ/kg·K)' }] : []),
+        ...(isPropertyVisible('s_plus') ? [{ id: 's_plus', label: 's+ (kJ/kg·K)' }] : []),
+      ]
+    : [];
+
+  const molarVisibleCols: VisibleTableCol[] = tableData?.type === 'ideal_gas_molar'
+    ? [
+        { id: 'T', label: `Temp (${tUnitLabel})` },
+        ...(isPropertyVisible('h_bar') ? [{ id: 'h_bar', label: 'h̄ (kJ/kmol)' }] : []),
+        ...(isPropertyVisible('u_bar') ? [{ id: 'u_bar', label: 'ū (kJ/kmol)' }] : []),
+        ...(isPropertyVisible('s_bar_deg') ? [{ id: 's_bar_deg', label: 's̄° (kJ/kmol·K)' }] : []),
+      ]
+    : [];
+
+  const a2bVisibleCols: VisibleTableCol[] = tableData?.type === 'specific_heat_temp'
+    ? [
+        { id: 'T', label: `Temp (${tUnitLabel})`, isCategoryEnd: true },
+        ...activeA2bGases.flatMap((g) => [
+          { id: `${g.id}_cp`, label: `${g.label} cp` },
+          { id: `${g.id}_cv`, label: `${g.label} cv` },
+          { id: `${g.id}_k`, label: `${g.label} k`, isCategoryEnd: true },
+        ]),
+      ]
+    : [];
+
+  const renderIsobarBlockTable = (
+    block: {
+      rows: Array<{
+        isSaturationState?: boolean;
+        T?: ThermoValue;
+        v: ThermoValue;
+        u: ThermoValue;
+        h: ThermoValue;
+        s: ThermoValue;
+      }>;
+    },
+    bIdx: number
+  ) => {
+    const isobarVisibleCols: VisibleTableCol[] = [
+      { id: 'T', label: `Temp (${tUnitLabel})` },
+      ...(isPropertyVisible('v') ? [{ id: 'v', label: 'v (m³/kg)' }] : []),
+      ...(isPropertyVisible('u') ? [{ id: 'u', label: 'u (kJ/kg)' }] : []),
+      ...(isPropertyVisible('h') ? [{ id: 'h', label: 'h (kJ/kg)' }] : []),
+      ...(isPropertyVisible('s') ? [{ id: 's', label: 's (kJ/kg·K)' }] : []),
+    ];
+    const blockInterpTrs = countInterpTrs(block.rows.length, bIdx);
+
+    return (
+      <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
+        <thead>
+          <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+            <th className="w-14 min-w-[56px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+            {renderColHeader('T', 'Temp', tUnitLabel, 'min-w-[68px]', 'temp')}
+            {isPropertyVisible('v') && renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
+            {isPropertyVisible('u') && renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
+            {isPropertyVisible('h') && renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
+            {isPropertyVisible('s') && renderColHeader('s', 's', 'kJ/kg·K', 'min-w-[85px]')}
+            {renderCollapsedPropertyHeaders()}
+          </tr>
+        </thead>
+        <tbody>
+          {block.rows.map((row, rIdx) => {
+            const rKey = `${bIdx}-${rIdx}`;
+            const tempStr = row.isSaturationState ? 'Sat' : (row.T?.s || '');
+            const isRowPinned = Boolean((tempStr && pinnedTemps.has(tempStr)) || pinnedRows.has(rKey));
+            const isHighlighted = highlightedRowIndex === rKey;
+            const isHovered = hoveredRow === rKey;
+            return (
+              <React.Fragment key={rIdx}>
+                <tr data-row-key={rKey} className="transition-colors bg-white dark:bg-gray-900">
+                  {renderProgressivePinCell(
+                    () => toggleTempHighlight(tempStr, rKey, bIdx),
+                    isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`,
+                    isRowPinned,
+                    isHighlighted,
+                    isHovered,
+                    rIdx < block.rows.length - 1,
+                    () => handleAddInterpolatedRow({
+                      blockIndex: bIdx,
+                      afterIndex: rIdx,
+                      dominatingColId: 'T',
+                      inputValue: '',
+                    }),
+                    true
+                  )}
+                  <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
+                  {isPropertyVisible('v') && <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>}
+                  {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
+                  {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
+                  {isPropertyVisible('s') && <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>}
+                  {renderCollapsedPropertyCells(rIdx, block.rows.length + blockInterpTrs)}
+                </tr>
+                {renderInterpRowsAfter(rIdx, isobarVisibleCols, collapsedPropertyColumns.length > 0, bIdx, true)}
+              </React.Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    );
+  };
+
+  const renderInterpRowsAfter = (
+    afterIdx: number,
+    visibleColList: VisibleTableCol[],
+    hasTrailingSpacer: boolean,
+    blockIdx?: number,
+    compactCard: boolean = false
+  ) => {
+    const matching = solvedInterpolatedRows.filter(
+      s => s.spec.afterIndex === afterIdx && s.spec.blockIndex === blockIdx
+    );
+    if (matching.length === 0) return null;
+    return matching.map(solved => (
+      <InterpolatedRowGroup
+        key={solved.spec.id}
+        solved={solved}
+        visibleCols={visibleColList}
+        hasTrailingSpacer={hasTrailingSpacer}
+        isPinned={pinnedRows.has(solved.spec.id)}
+        isHighlighted={highlightedRowIndex === solved.spec.id}
+        compactCard={compactCard}
+        selectedCols={selectedCols}
+        hoveredCol={hoveredCol}
+        onMouseEnterCol={handleMouseEnterCol}
+        onMouseLeaveCol={handleMouseLeaveCol}
+        onUpdateInput={handleUpdateInterpInput}
+        onSelectDominatingCol={handleSelectDominatingCol}
+        onTogglePin={togglePin}
+        onDelete={handleDeleteInterpRow}
+        onToggleMoreDigits={handleToggleMoreDigits}
+        onToggleAnalytic={handleToggleAnalytic}
+        onRelocate={handleRelocateInterpRow}
+      />
+    ));
+  };
+
   return (
     <>
       <TooltipPortal tooltip={tooltip} />
@@ -1036,8 +1620,36 @@ export default function App() {
         touchedBlocks={touchedBlocks}
         disabledBlocks={disabledBlocks}
         selectedCols={selectedCols}
+        interpolatedRows={solvedInterpolatedRows}
         onClearAllSelections={clearCurrentTableSelections}
       />
+      {actionModalMode !== null && (
+        <ActionMenuModal
+          key={`${currentTableId}-${actionModalMode}`}
+          isOpen={true}
+          mode={actionModalMode}
+          onClose={() => setActionModalMode(null)}
+          tableData={tableData}
+          tempUnit={tempUnit}
+          pressUnit={pressUnit}
+          jumpValue={jumpValue}
+          onChangeJumpValue={setJumpValue}
+          jumpProperty={jumpProperty}
+          onChangeJumpProperty={setJumpProperty}
+          jumpSuperheatedUnit={jumpSuperheatedUnit}
+          onChangeJumpSuperheatedUnit={(unit) => {
+            setJumpSuperheatedUnit(unit);
+            setPressUnit(unit);
+          }}
+          jumpOptions={jumpOptions}
+          onJump={handleJump}
+          isProgressive={isProgressive}
+          progressiveCols={progressiveCols}
+          onAddInterpolatedRow={handleAddInterpolatedRow}
+          activeSnippetRowCount={activeSnippetRowCount}
+          onOpenSnippet={() => setIsSnippetOpen(true)}
+        />
+      )}
       <div
         className="h-screen h-dvh w-screen overflow-hidden bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100 flex flex-col pt-0 pb-0 px-0 m-0 relative"
         onMouseMove={handleRootMouseMove}
@@ -1045,141 +1657,172 @@ export default function App() {
       >
         {/* Top Header / Red Bar */}
         <div
-          className="bg-[#c13726] dark:bg-[#852115] text-white px-4 py-2 flex flex-col md:flex-row md:items-center justify-between gap-3 shrink-0 relative z-[100] shadow-md border-b border-[#a82e1f] dark:border-black/30"
+          className="bg-[#c13726] dark:bg-[#852115] text-white px-2.5 py-1.5 sm:px-4 sm:py-2 flex flex-col md:flex-row md:items-center justify-between gap-1.5 sm:gap-2.5 shrink-0 relative z-[100] shadow-md border-b border-[#a82e1f] dark:border-black/30"
           onMouseEnter={clearAllHover}
         >
-          <div className="flex flex-col gap-0.5">
-            <div className="flex flex-wrap items-center gap-2.5">
-              <span className="text-xl font-bold tracking-wide uppercase text-white drop-shadow-sm">
-                {currentTable.name}
-              </span>
+          <div className="flex flex-col gap-1 min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5 sm:gap-2 min-w-0">
+                <span className="text-base sm:text-xl font-bold tracking-wide uppercase text-white drop-shadow-sm leading-tight">
+                  {currentTable.name}
+                </span>
 
-              {/* Switch Table Compact Glyph Button */}
-              <div className="relative" ref={switcherRef}>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => setIsSwitcherOpen(prev => !prev)}
-                    className="inline-flex items-center justify-center p-1.5 text-white/90 bg-white/15 hover:bg-white/25 active:bg-white/30 rounded border border-white/25 transition-colors cursor-pointer"
-                    title="Switch Table"
-                  >
-                    <Layers className="w-4 h-4" />
-                    <ChevronDown className="w-3 h-3 ml-0.5 opacity-80" />
-                  </button>
-                  <span className="hidden sm:inline-block text-[9px] font-medium text-white/60 border border-white/20 rounded px-1 tracking-wider uppercase pointer-events-none">Tab</span>
+                {/* Switch Table Compact Glyph Button */}
+                <div className="relative" ref={switcherRef}>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setIsSwitcherOpen(prev => !prev)}
+                      className="inline-flex items-center justify-center p-1 sm:p-1.5 text-white/90 bg-white/15 hover:bg-white/25 active:bg-white/30 rounded border border-white/25 transition-colors cursor-pointer"
+                      title="Switch Table"
+                    >
+                      <Layers className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                      <ChevronDown className="w-3 h-3 ml-0.5 opacity-80" />
+                    </button>
+                    <span className="hidden sm:inline-block text-[9px] font-medium text-white/60 border border-white/20 rounded px-1 tracking-wider uppercase pointer-events-none">Tab</span>
+                  </div>
+
+                  {isSwitcherOpen && (
+                    <div className="fixed left-3 right-3 top-12 sm:absolute sm:top-full sm:left-0 sm:right-auto sm:mt-2 sm:w-[460px] bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 z-[110] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100">
+                      <div className="p-2.5 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded px-2.5 py-1 flex-1">
+                          <Search className="w-3.5 h-3.5 text-gray-400" />
+                          <input 
+                            type="text"
+                            placeholder="Search table (e.g. A17, A-4, water)..."
+                            value={tableSearchQuery}
+                            onChange={(e) => setTableSearchQuery(e.target.value)}
+                            onKeyDown={handleSwitcherKeyDown}
+                            className="w-full text-xs bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none"
+                            autoFocus
+                          />
+                        </div>
+                        <button 
+                          onClick={() => setIsSwitcherOpen(false)}
+                          className="p-1 text-gray-400 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="max-h-[340px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
+                        {filteredTables.map((t, idx) => {
+                          const isSelected = t.id === currentTableId;
+                          const isMenuFocused = idx === menuSelectedIndex;
+                          return (
+                            <div
+                              key={t.id}
+                              onClick={() => {
+                                switchTable(t.id);
+                              }}
+                              className={cn(
+                                "p-2.5 hover:bg-red-50/70 dark:hover:bg-red-950/40 cursor-pointer transition-colors flex flex-col gap-1 text-left",
+                                isSelected && "bg-red-50/80 dark:bg-red-950/60",
+                                isMenuFocused && !isSelected && "bg-gray-100 dark:bg-gray-800",
+                                isMenuFocused && isSelected && "ring-2 ring-[#c13726] dark:ring-red-500 ring-inset"
+                              )}
+                            >
+                              <div className="flex items-center justify-between gap-2">
+                                <span className={cn("text-xs font-bold", isSelected ? "text-[#c13726] dark:text-red-400" : "text-gray-900 dark:text-gray-100")}>
+                                  {t.name}: {t.title}
+                                </span>
+                                {isSelected && <Check className="w-3.5 h-3.5 text-[#c13726] dark:text-red-400 shrink-0" />}
+                              </div>
+                              <div className="flex items-center gap-1.5 flex-wrap">
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
+                                  {t.state}
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border border-blue-200/70 dark:border-blue-800/60">
+                                  {t.substance}
+                                </span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 dark:bg-purple-950/60 text-purple-800 dark:text-purple-300 border border-purple-200/70 dark:border-purple-800/60">
+                                  {t.type}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                        {filteredTables.length === 0 && (
+                          <div className="p-4 text-center text-xs text-gray-500 dark:text-gray-400">
+                            No tables match your query.
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </div>
 
-                {isSwitcherOpen && (
-                  <div className="fixed left-3 right-3 top-12 sm:absolute sm:top-full sm:left-0 sm:right-auto sm:mt-2 sm:w-[460px] bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100 rounded-lg shadow-2xl border border-gray-200 dark:border-gray-700 z-[110] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-100">
-                    <div className="p-2.5 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between gap-2">
-                      <div className="flex items-center gap-1.5 bg-white dark:bg-gray-900 border border-gray-300 dark:border-gray-700 rounded px-2.5 py-1 flex-1">
-                        <Search className="w-3.5 h-3.5 text-gray-400" />
-                        <input 
-                          type="text"
-                          placeholder="Search table (e.g. A17, A-4, water)..."
-                          value={tableSearchQuery}
-                          onChange={(e) => setTableSearchQuery(e.target.value)}
-                          onKeyDown={handleSwitcherKeyDown}
-                          className="w-full text-xs bg-transparent text-gray-900 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none"
-                          autoFocus
-                        />
-                      </div>
-                      <button 
-                        onClick={() => setIsSwitcherOpen(false)}
-                        className="p-1 text-gray-400 dark:text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
+                {/* Tags + Description/Notes Toggle */}
+                <div className="flex flex-wrap items-center gap-1 sm:gap-1.5">
+                  <span className="px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-semibold bg-black/20 text-white border border-white/20 backdrop-blur-sm leading-tight">
+                    {currentTable.state}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-semibold bg-black/20 text-white border border-white/20 backdrop-blur-sm leading-tight">
+                    {currentTable.substance}
+                  </span>
+                  <span className="px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-semibold bg-black/20 text-white border border-white/20 backdrop-blur-sm leading-tight">
+                    {currentTable.type}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setIsDescOpen(prev => !prev)}
+                    className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] sm:text-xs font-medium bg-white/15 hover:bg-white/25 active:bg-white/30 text-white border border-white/25 cursor-pointer transition-colors leading-tight"
+                    title="Toggle table description & notes"
+                    aria-expanded={isDescOpen}
+                  >
+                    <Info className="w-3 h-3" />
+                    <ChevronDown className={cn("w-3 h-3 transition-transform", isDescOpen && "rotate-180")} />
+                  </button>
+                </div>
+              </div>
 
-                    <div className="max-h-[340px] overflow-y-auto divide-y divide-gray-100 dark:divide-gray-800">
-                      {filteredTables.map((t, idx) => {
-                        const isSelected = t.id === currentTableId;
-                        const isMenuFocused = idx === menuSelectedIndex;
-                        return (
-                          <div
-                            key={t.id}
-                            onClick={() => {
-                              switchTable(t.id);
-                            }}
-                            className={cn(
-                              "p-2.5 hover:bg-red-50/70 dark:hover:bg-red-950/40 cursor-pointer transition-colors flex flex-col gap-1 text-left",
-                              isSelected && "bg-red-50/80 dark:bg-red-950/60",
-                              isMenuFocused && !isSelected && "bg-gray-100 dark:bg-gray-800",
-                              isMenuFocused && isSelected && "ring-2 ring-[#c13726] dark:ring-red-500 ring-inset"
-                            )}
-                          >
-                            <div className="flex items-center justify-between gap-2">
-                              <span className={cn("text-xs font-bold", isSelected ? "text-[#c13726] dark:text-red-400" : "text-gray-900 dark:text-gray-100")}>
-                                {t.name}: {t.title}
-                              </span>
-                              {isSelected && <Check className="w-3.5 h-3.5 text-[#c13726] dark:text-red-400 shrink-0" />}
-                            </div>
-                            <div className="flex items-center gap-1.5 flex-wrap">
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300">
-                                {t.state}
-                              </span>
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-blue-50 dark:bg-blue-950/60 text-blue-800 dark:text-blue-300 border border-blue-200/70 dark:border-blue-800/60">
-                                {t.substance}
-                              </span>
-                              <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-50 dark:bg-purple-950/60 text-purple-800 dark:text-purple-300 border border-purple-200/70 dark:border-purple-800/60">
-                                {t.type}
-                              </span>
-                            </div>
-                          </div>
-                        );
-                      })}
-                      {filteredTables.length === 0 && (
-                        <div className="p-4 text-center text-xs text-gray-500 dark:text-gray-400">
-                          No tables match your query.
-                        </div>
-                      )}
-                    </div>
-                  </div>
+              {/* Mobile Compact Action Button (+ / Menu) */}
+              <button
+                type="button"
+                onClick={() => setActionModalMode('mobile')}
+                className="md:hidden inline-flex items-center gap-1 px-2 py-1 rounded bg-white/15 hover:bg-white/25 active:bg-white/30 text-white border border-white/25 shrink-0 cursor-pointer transition-colors"
+                aria-label="Open menu: jump, interpolate, snippet"
+                title="Jump to row, interpolate, or capture snippet"
+              >
+                <Menu className="w-4 h-4" />
+                {activeSnippetRowCount > 0 && (
+                  <span className="inline-flex items-center justify-center px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-amber-400 text-gray-950 leading-tight">
+                    {activeSnippetRowCount}
+                  </span>
                 )}
-              </div>
-
-              {/* Tags */}
-              <div className="flex items-center gap-1.5">
-                <span className="px-2 py-0.5 rounded text-xs font-semibold bg-black/20 text-white border border-white/20 backdrop-blur-sm">
-                  {currentTable.state}
-                </span>
-                <span className="px-2 py-0.5 rounded text-xs font-semibold bg-black/20 text-white border border-white/20 backdrop-blur-sm">
-                  {currentTable.substance}
-                </span>
-                <span className="px-2 py-0.5 rounded text-xs font-semibold bg-black/20 text-white border border-white/20 backdrop-blur-sm">
-                  {currentTable.type}
-                </span>
-              </div>
+              </button>
             </div>
 
-            <p className="text-xs text-white/90 mt-0.5 max-w-2xl leading-relaxed font-normal">
-              {currentTable.description}
-            </p>
+            {isDescOpen && (
+              <div className="text-[11px] sm:text-xs text-white/95 bg-black/20 border border-white/15 rounded px-2.5 py-1.5 mt-0.5 max-w-3xl leading-relaxed space-y-1">
+                <p>{currentTable.description}</p>
+                {tableNote && <p className="text-white/80 border-t border-white/15 pt-1">{tableNote}</p>}
+              </div>
+            )}
           </div>
           
-          {/* Jump-to & Snippet Controls */}
-          <div className="flex flex-nowrap items-center gap-1 sm:gap-2 bg-black/15 dark:bg-black/25 p-1.5 rounded-md border border-white/20 dark:border-white/15 shrink-0 w-full md:w-auto text-gray-900 dark:text-gray-100 relative">
-            <Search className="hidden sm:block w-4 h-4 text-white/80 ml-1 shrink-0" />
+          {/* Desktop Jump-to, Interpolate & Snippet Controls */}
+          <div className="hidden md:flex flex-nowrap items-center gap-1.5 bg-black/15 dark:bg-black/25 p-1.5 rounded-md border border-white/20 dark:border-white/15 shrink-0 text-gray-900 dark:text-gray-100 relative">
+            <Search className="w-4 h-4 text-white/80 ml-1 shrink-0" />
             
             {(tableData?.type === 'superheated' || tableData?.type === 'compressed') ? (
-              <div className="flex items-center gap-1.5 flex-1 min-w-0 md:flex-initial">
-                <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
+              <div className="flex items-center gap-1">
+                <div className="relative flex items-center">
                   <input
                     ref={jumpInputRef}
                     type="number"
                     step="any"
                     aria-label="Pressure to jump to"
-                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-base sm:text-sm w-full md:w-28 min-w-0 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm h-8 w-28 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
                     placeholder="Pressure"
                     value={jumpValue}
                     onChange={(e) => setJumpValue(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleJump()}
                   />
-                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
+                  {!jumpValue && <span className="absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
                 </div>
                 <select
                   aria-label="Pressure unit"
-                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-base sm:text-sm focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm h-8 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
                   value={jumpSuperheatedUnit}
                   onChange={(e) => {
                     const unit = e.target.value as PressUnit;
@@ -1187,58 +1830,73 @@ export default function App() {
                     setPressUnit(unit);
                   }}
                 >
-                  <option value="MPa">MPa</option>
-                  <option value="kPa">kPa</option>
-                  <option value="bar">bar</option>
+                  <option value="MPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">MPa</option>
+                  <option value="kPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">kPa</option>
+                  <option value="bar" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">bar</option>
                 </select>
               </div>
             ) : (
               <>
-                <div className="relative flex items-center flex-1 min-w-0 md:flex-initial">
+                <div className="relative flex items-center">
                   <input
                     ref={jumpInputRef}
                     type={jumpProperty === 'substance' ? 'text' : 'number'}
                     step={jumpProperty === 'substance' ? undefined : 'any'}
                     aria-label={jumpProperty === 'substance' ? 'Substance or formula to jump to' : 'Value to jump to'}
-                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-base sm:text-sm w-full md:w-28 min-w-0 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
+                    className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm h-8 w-28 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 tabular-nums placeholder-gray-400 dark:placeholder-white/45"
                     placeholder={jumpProperty === 'substance' ? 'Name' : 'Value'}
                     value={jumpValue}
                     onChange={(e) => setJumpValue(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && handleJump()}
                   />
-                  {!jumpValue && <span className="hidden sm:inline-block absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
+                  {!jumpValue && <span className="absolute right-2 text-[9px] font-semibold text-gray-400 dark:text-white/45 pointer-events-none">Ctrl+K</span>}
                 </div>
                 <select
                   aria-label="Jump property"
                   title={jumpProperty === 'substance' ? 'Substance' : jumpOptions.find(option => option.id === jumpProperty)?.label}
-                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-1.5 sm:px-2 py-1 text-base sm:text-sm w-[104px] sm:w-40 max-w-[35vw] focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
+                  className="bg-white dark:bg-black/35 border border-white/30 dark:border-white/20 text-gray-900 dark:text-white rounded px-2 py-1 text-sm h-8 w-36 focus:outline-none focus:ring-2 focus:ring-white/50 dark:focus:ring-white/35 cursor-pointer font-medium shrink-0"
                   value={jumpProperty}
                   onChange={(e) => setJumpProperty(e.target.value)}
                 >
                   {tableData && 'rows' in tableData && tableData.rows.length > 0 && 'substance' in tableData.rows[0] && (
-                    <option value="substance">Name</option>
+                    <option value="substance" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">Name</option>
                   )}
                   {jumpOptions.map(option => (
-                    <option key={option.id} value={option.id}>{option.label}</option>
+                    <option key={option.id} value={option.id} className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">{option.label}</option>
                   ))}
                 </select>
               </>
             )}
             
             <button 
-              className="bg-white dark:bg-white/15 hover:bg-red-50 dark:hover:bg-white/25 active:bg-red-100 dark:active:bg-white/30 text-[#c13726] dark:text-white border border-transparent dark:border-white/25 font-semibold px-2.5 sm:px-3 py-1 rounded text-sm shadow-sm transition-colors cursor-pointer shrink-0"
+              className="bg-white dark:bg-white/15 hover:bg-red-50 dark:hover:bg-white/25 active:bg-red-100 dark:active:bg-white/30 text-[#c13726] dark:text-white border border-transparent dark:border-white/25 font-semibold px-2.5 py-0.5 h-8 rounded text-sm shadow-sm transition-colors cursor-pointer shrink-0"
               onClick={handleJump}
             >
               Jump
             </button>
 
-            <div className="hidden sm:block h-5 w-px bg-white/25 shrink-0 mx-0.5" />
+            {isProgressive && (
+              <>
+                <div className="h-5 w-px bg-white/25 shrink-0 mx-0.5" />
+                <button
+                  type="button"
+                  onClick={() => setActionModalMode('interpolate')}
+                  className="inline-flex items-center gap-1 px-2.5 py-0.5 h-8 rounded text-sm font-semibold bg-emerald-600/90 hover:bg-emerald-500 active:bg-emerald-700 text-white border border-emerald-300/40 transition-colors cursor-pointer shrink-0 shadow-sm"
+                  title="Insert & solve an interpolated row between two table rows"
+                >
+                  <Plus className="w-4 h-4 shrink-0" />
+                  <span>Interpolate</span>
+                </button>
+              </>
+            )}
+
+            <div className="h-5 w-px bg-white/25 shrink-0 mx-0.5" />
 
             <button
               type="button"
               onClick={() => setIsSnippetOpen(true)}
               className={cn(
-                "inline-flex items-center justify-center p-1.5 sm:px-2 rounded text-sm font-semibold transition-colors cursor-pointer shrink-0 border",
+                "inline-flex items-center justify-center px-2.5 py-0.5 h-8 rounded text-sm font-semibold transition-colors cursor-pointer shrink-0 border",
                 activeSnippetRowCount > 0
                   ? "bg-amber-400 hover:bg-amber-300 active:bg-amber-500 text-gray-950 border-amber-300 shadow-sm"
                   : "bg-white/15 hover:bg-white/25 active:bg-white/30 text-white border-white/25"
@@ -1263,7 +1921,7 @@ export default function App() {
         {/* Sub-table switcher bar for A-2(a,b,c) and A-3(a,b,c) */}
         {(currentTableId.startsWith('A-2') || currentTableId.startsWith('A-3')) && (
           <div
-            className="bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-2 sm:px-4 py-1.5 flex items-center justify-between gap-2 shrink-0 flex-wrap"
+            className="bg-gray-100 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-2.5 sm:px-4 py-1 flex items-center justify-between gap-2 shrink-0 flex-wrap"
             onMouseEnter={clearAllHover}
           >
             <div className="flex items-center gap-1.5 flex-wrap">
@@ -1289,7 +1947,7 @@ export default function App() {
                     type="button"
                     onClick={() => switchTable(part.id)}
                     className={cn(
-                      'px-2.5 py-1 rounded text-xs font-semibold transition-colors cursor-pointer border',
+                      'px-2 py-0.5 rounded text-[11px] sm:text-xs font-semibold transition-colors cursor-pointer border',
                       active
                         ? 'bg-[#c13726] text-white border-[#a82e1f] shadow-sm'
                         : 'bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 border-gray-300 dark:border-gray-700 hover:bg-red-50 dark:hover:bg-gray-700'
@@ -1301,75 +1959,9 @@ export default function App() {
               })}
             </div>
             {currentTableId === 'A-2c' && (
-              <span className="text-xs font-mono text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 px-2.5 py-0.5 rounded border border-gray-200 dark:border-gray-700">
+              <span className="hidden md:inline-block text-xs font-mono text-gray-600 dark:text-gray-300 bg-white dark:bg-gray-800 px-2.5 py-0.5 rounded border border-gray-200 dark:border-gray-700">
                 c̄p = a + bT + cT² + dT³ &nbsp;(T in K, c̄p in kJ/kmol·K)
               </span>
-            )}
-          </div>
-        )}
-
-        {tableData && (tableData.type !== 'specific_heat_300k' || tableNote) && (
-          <div className="flex flex-wrap items-center gap-x-2 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 px-2 sm:px-4 shrink-0">
-            {tableData.type !== 'specific_heat_300k' && <div className="flex items-center gap-2 py-1 text-xs font-semibold text-gray-700 dark:text-gray-200">
-              <label className="flex items-center gap-1">
-                <span>Temp</span>
-                <select
-                  aria-label="Table temperature unit"
-                  value={tempUnit}
-                  onChange={e => setTempUnit(e.target.value as TempUnit)}
-                  className="min-h-8 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-1 text-base sm:text-xs"
-                >
-                  <option value="C">°C</option>
-                  <option value="K">K</option>
-                </select>
-              </label>
-              {(tableData.type === 'saturated' || tableData.type === 'critical_properties' || tableData.type === 'superheated' || tableData.type === 'compressed') && (
-                <label className="flex items-center gap-1">
-                  <span>Press</span>
-                  <select
-                    aria-label="Table pressure unit"
-                    value={pressUnit}
-                    onChange={e => {
-                      const unit = e.target.value as PressUnit;
-                      setPressUnit(unit);
-                      setJumpSuperheatedUnit(unit);
-                    }}
-                    className="min-h-8 rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800 px-1 text-base sm:text-xs"
-                  >
-                    <option value="kPa">kPa</option>
-                    <option value="MPa">MPa</option>
-                    <option value="bar">bar</option>
-                  </select>
-                </label>
-              )}
-            </div>}
-            {propertyColumns.length > 0 && (
-              <fieldset aria-label="Visible property columns" className="flex flex-wrap items-center gap-x-1 min-w-0">
-                <span className="text-xs font-semibold text-gray-600 dark:text-gray-300">Columns:</span>
-                {propertyColumns.map(column => (
-                  <label key={column.id} className="inline-flex items-center gap-1 px-1.5 py-2 text-xs font-semibold text-gray-700 dark:text-gray-200 cursor-pointer rounded hover:bg-gray-100 dark:hover:bg-gray-800">
-                    <input
-                      type="checkbox"
-                      checked={isPropertyVisible(column.id)}
-                      onChange={() => togglePropertyVisibility(column.id)}
-                      aria-label={`Show ${column.label} column`}
-                      className="w-4 h-4 accent-[#c13726] cursor-pointer"
-                    />
-                    {column.label}
-                  </label>
-                ))}
-              </fieldset>
-            )}
-            {tableNote && (
-              <details key={currentTableId} className="relative z-50 ml-auto text-xs text-gray-700 dark:text-gray-200">
-                <summary aria-label="Table notes" title="Table notes" className="flex cursor-pointer list-none items-center gap-1 rounded px-2 py-2 font-semibold hover:bg-gray-200 dark:hover:bg-gray-800">
-                  <Info className="h-4 w-4" aria-hidden="true" />
-                  <span className="hidden sm:inline">Table notes</span>
-                </summary>
-                <div className="absolute right-0 top-full w-[min(90vw,24rem)] max-h-[50vh] overflow-y-auto rounded border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 p-3 leading-relaxed shadow-xl">
-                  {tableNote}
-                </div>
-              </details>
             )}
           </div>
         )}
@@ -1382,7 +1974,7 @@ export default function App() {
               <table className="min-w-full border-collapse border-spacing-0 text-left" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr>
-                    <th rowSpan={2} className="w-10 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-40 h-14"></th>
+                    <th rowSpan={2} className="w-14 min-w-[56px] bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-40 h-14"></th>
                     
                     {/* Index Col 1: Temp or Pressure */}
                     {tableData.indexProperty === 'T' ? (
@@ -1651,37 +2243,25 @@ export default function App() {
                     const isHovered = hoveredRow === rKey;
 
                     return (
-                      <tr 
-                        key={idx}
-                        data-row-key={rKey}
-                        ref={el => { rowRefs.current[rKey] = el; }}
-                        className="transition-colors bg-white dark:bg-gray-900"
-                      >
-                        <td
-                          data-pin-cell="true"
-                          onClick={() => togglePin(rKey)}
-                          className={cn(
-                            "px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
-                            isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
-                            isHighlighted && "bg-indigo-200 dark:bg-[#23254b] border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20"
-                          )}
-                          title={isPinned ? "Unpin row" : "Highlight row"}
+                      <React.Fragment key={idx}>
+                        <tr
+                          data-row-key={rKey}
+                          ref={el => { rowRefs.current[rKey] = el; }}
+                          className="transition-colors bg-white dark:bg-gray-900"
                         >
-                          <button 
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
-                            className={cn(
-                              "p-1.5 rounded transition-colors cursor-pointer",
-                              isPinned 
-                                ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30 shadow-sm" 
-                                : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700",
-                              isHovered && !isPinned && "text-gray-500 dark:text-gray-300"
-                            )}
-                            title={isPinned ? "Unpin row" : "Highlight row"}
-                          >
-                            <Highlighter className="w-4 h-4" />
-                          </button>
-                        </td>
+                          {renderProgressivePinCell(
+                            () => togglePin(rKey),
+                            isPinned ? "Unpin row" : "Highlight row",
+                            isPinned,
+                            isHighlighted,
+                            isHovered,
+                            idx < tableData.rows.length - 1,
+                            () => handleAddInterpolatedRow({
+                              afterIndex: idx,
+                              dominatingColId: tableData.indexProperty,
+                              inputValue: '',
+                            })
+                          )}
 
                         {tableData.indexProperty === 'T' ? (
                           <>
@@ -1766,15 +2346,17 @@ export default function App() {
                         <td className="bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-0" />
 
                         {idx === 0 && collapsedCategories.map((c) => (
-                          <td 
-                            key={c.id} 
-                            rowSpan={tableData.rows.length} 
+                          <td
+                            key={c.id}
+                            rowSpan={tableData.rows.length + countInterpTrs(tableData.rows.length)}
                             className="bg-gray-50 dark:bg-gray-900 border-l-2 border-l-gray-300 dark:border-l-gray-700 border-b-0 p-0"
                           />
                         ))}
                       </tr>
-                    );
-                  })}
+                      {renderInterpRowsAfter(idx, saturatedVisibleCols, true)}
+                    </React.Fragment>
+                  );
+                })}
                 </tbody>
               </table>
             )}
@@ -1789,6 +2371,24 @@ export default function App() {
                     {tableData.blocks.length - disabledBlocks.size} of {tableData.blocks.length} isobars visible
                   </span>
                   <div className="flex items-center gap-2 sm:gap-3">
+                    <div className="flex items-center gap-1.5 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 px-2 py-1 rounded text-xs">
+                      <span className="font-semibold text-gray-600 dark:text-gray-300">Press:</span>
+                      <select
+                        aria-label="Isobar pressure unit"
+                        value={pressUnit}
+                        onChange={e => {
+                          const unit = e.target.value as PressUnit;
+                          setPressUnit(unit);
+                          setJumpSuperheatedUnit(unit);
+                        }}
+                        className="bg-transparent border-b border-gray-300 dark:border-gray-600 font-semibold text-gray-800 dark:text-gray-200 cursor-pointer focus:outline-none hover:border-red-600 dark:hover:border-red-400 transition-colors"
+                      >
+                        <option value="MPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">MPa</option>
+                        <option value="kPa" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">kPa</option>
+                        <option value="bar" className="bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100">bar</option>
+                      </select>
+                    </div>
+
                     <div className="relative" ref={filterMenuRef}>
                       <button 
                         onClick={() => setShowBlockFilter(!showBlockFilter)}
@@ -1865,56 +2465,8 @@ export default function App() {
                                  </button>
                                </div>
                                <div className="overflow-x-auto w-full">
-                                 <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
-                                   <thead>
-                                    <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                                      <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
-                                      {renderColHeader('T', 'Temp', '°C', 'min-w-[68px]')}
-                                      {isPropertyVisible('v') && renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
-                                      {isPropertyVisible('u') && renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
-                                      {isPropertyVisible('h') && renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
-                                      {isPropertyVisible('s') && renderColHeader('s', 's', 'kJ/kg·K', 'min-w-[85px]')}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {block.rows.map((row, rIdx) => {
-                                       const rKey = `${bIdx}-${rIdx}`;
-                                       const tempStr = row.isSaturationState ? 'Sat' : (row.T?.s || '');
-                                       const isRowPinned = (tempStr && pinnedTemps.has(tempStr)) || pinnedRows.has(rKey);
-                                       const isHighlighted = highlightedRowIndex === rKey;
-                                       const isHovered = hoveredRow === rKey;
-                                       return (
-                                         <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900">
-                                           <td
-                                             data-pin-cell="true"
-                                             onClick={() => toggleTempHighlight(tempStr, rKey, bIdx)}
-                                             className={cn(
-                                               "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
-                                               isRowPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
-                                               isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
-                                             )}
-                                             title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
-                                           >
-                                             <button 
-                                               type="button"
-                                               onClick={(e) => { e.stopPropagation(); toggleTempHighlight(tempStr, rKey, bIdx); }} 
-                                               className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
-                                               title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
-                                             >
-                                               <Highlighter className="w-3.5 h-3.5" />
-                                             </button>
-                                           </td>
-                                           <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
-                                          {isPropertyVisible('v') && <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>}
-                                          {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
-                                          {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
-                                          {isPropertyVisible('s') && <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>}
-                                        </tr>
-                                      );
-                                   })}
-                                 </tbody>
-                               </table>
-                             </div>
+                                 {renderIsobarBlockTable(block, bIdx)}
+                               </div>
                             </div>
                           )
                         })}
@@ -1966,55 +2518,7 @@ export default function App() {
                             
                             {!isCollapsed && (
                               <div className="overflow-x-auto w-full">
-                                <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
-                                  <thead>
-                                    <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                                      <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
-                                      {renderColHeader('T', 'Temp', '°C', 'min-w-[68px]')}
-                                      {isPropertyVisible('v') && renderColHeader('v', 'v', 'm³/kg', 'min-w-[85px]')}
-                                      {isPropertyVisible('u') && renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
-                                      {isPropertyVisible('h') && renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
-                                      {isPropertyVisible('s') && renderColHeader('s', 's', 'kJ/kg·K', 'min-w-[85px]')}
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    {block.rows.map((row, rIdx) => {
-                                        const rKey = `${bIdx}-${rIdx}`;
-                                        const tempStr = row.isSaturationState ? 'Sat' : (row.T?.s || '');
-                                        const isRowPinned = (tempStr && pinnedTemps.has(tempStr)) || pinnedRows.has(rKey);
-                                        const isHighlighted = highlightedRowIndex === rKey;
-                                        const isHovered = hoveredRow === rKey;
-                                        return (
-                                          <tr key={rIdx} data-row-key={rKey} ref={el => { rowRefs.current[rKey] = el; }} className="transition-colors bg-white dark:bg-gray-900">
-                                            <td
-                                              data-pin-cell="true"
-                                              onClick={() => toggleTempHighlight(tempStr, rKey, bIdx)}
-                                              className={cn(
-                                                "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
-                                                isRowPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
-                                                isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
-                                              )}
-                                              title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
-                                            >
-                                              <button 
-                                                type="button"
-                                                onClick={(e) => { e.stopPropagation(); toggleTempHighlight(tempStr, rKey, bIdx); }} 
-                                                className={cn("p-1 rounded cursor-pointer transition-colors", isRowPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
-                                                title={isRowPinned ? `Unpin T = ${tempStr || 'Sat'}` : `Highlight T = ${tempStr || 'Sat'}`}
-                                              >
-                                                <Highlighter className="w-3.5 h-3.5" />
-                                              </button>
-                                            </td>
-                                            <Td colId="T" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.isSaturationState ? <span className="font-bold text-[#c13726] dark:text-red-400">Sat.</span> : formatTempDisplay(row.T)}</Td>
-                                            {isPropertyVisible('v') && <Td colId="v" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v'} isColSelected={selectedCols.has('v')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v.s}</Td>}
-                                            {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
-                                            {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
-                                            {isPropertyVisible('s') && <Td colId="s" isRowHovered={isHovered} isPinned={isRowPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's'} isColSelected={selectedCols.has('s')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s.s}</Td>}
-                                          </tr>
-                                        );
-                                    })}
-                                  </tbody>
-                                </table>
+                                {renderIsobarBlockTable(block, bIdx)}
                               </div>
                             )}
                           </div>
@@ -2031,12 +2535,13 @@ export default function App() {
               <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+                    <th className="w-14 min-w-[56px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('T', 'Temp', tempUnit === 'C' ? '°C' : 'K', 'min-w-[70px]', 'temp')}
                     {isPropertyVisible('h') && renderColHeader('h', 'h', 'kJ/kg', 'min-w-[85px]')}
                     {isPropertyVisible('u') && renderColHeader('u', 'u', 'kJ/kg', 'min-w-[85px]')}
                     {isPropertyVisible('s_deg') && renderColHeader('s_deg', 's°', 'kJ/kg·K', 'min-w-[85px]')}
                     {isPropertyVisible('s_plus') && renderColHeader('s_plus', 's+', 'kJ/kg·K', 'min-w-[85px]')}
+                    {renderCollapsedPropertyHeaders()}
                   </tr>
                 </thead>
                 <tbody>
@@ -2045,39 +2550,37 @@ export default function App() {
                     const isPinned = pinnedRows.has(rKey);
                     const isHighlighted = highlightedRowIndex === rKey;
                     const isHovered = hoveredRow === rKey;
-                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tempUnit === 'C' ? '°C' : 'K'}`;
+                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tUnitLabel}`;
                     return (
-                      <tr 
-                        key={idx}
-                        data-row-key={rKey}
-                        ref={el => { rowRefs.current[rKey] = el; }}
-                        className="transition-colors bg-white dark:bg-gray-900"
-                      >
-                        <td
-                          data-pin-cell="true"
-                          onClick={() => togglePin(rKey)}
-                          className={cn(
-                            "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
-                            isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
-                            isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
-                          )}
-                          title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
+                      <React.Fragment key={idx}>
+                        <tr
+                          data-row-key={rKey}
+                          ref={el => { rowRefs.current[rKey] = el; }}
+                          className="transition-colors bg-white dark:bg-gray-900"
                         >
-                          <button 
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
-                            className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
-                            title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
-                          >
-                            <Highlighter className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
-                        {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
-                        {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
-                        {isPropertyVisible('s_deg') && <Td colId="s_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_deg'} isColSelected={selectedCols.has('s_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_deg.s}</Td>}
-                        {isPropertyVisible('s_plus') && <Td colId="s_plus" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_plus'} isColSelected={selectedCols.has('s_plus')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_plus?.s || '-'}</Td>}
-                      </tr>
+                          {renderProgressivePinCell(
+                            () => togglePin(rKey),
+                            isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`,
+                            isPinned,
+                            isHighlighted,
+                            isHovered,
+                            idx < tableData.rows.length - 1,
+                            () => handleAddInterpolatedRow({
+                              afterIndex: idx,
+                              dominatingColId: 'T',
+                              inputValue: '',
+                            }),
+                            true
+                          )}
+                          <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
+                          {isPropertyVisible('h') && <Td colId="h" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h'} isColSelected={selectedCols.has('h')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h.s}</Td>}
+                          {isPropertyVisible('u') && <Td colId="u" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u'} isColSelected={selectedCols.has('u')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u.s}</Td>}
+                          {isPropertyVisible('s_deg') && <Td colId="s_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_deg'} isColSelected={selectedCols.has('s_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_deg.s}</Td>}
+                          {isPropertyVisible('s_plus') && <Td colId="s_plus" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_plus'} isColSelected={selectedCols.has('s_plus')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_plus?.s || '-'}</Td>}
+                          {renderCollapsedPropertyCells(idx, tableData.rows.length + countInterpTrs(tableData.rows.length))}
+                        </tr>
+                        {renderInterpRowsAfter(idx, airVisibleCols, collapsedPropertyColumns.length > 0)}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -2089,11 +2592,12 @@ export default function App() {
               <table className="w-full min-w-full text-left border-collapse" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
-                    <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
+                    <th className="w-14 min-w-[56px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('T', 'Temp', tempUnit === 'C' ? '°C' : 'K', 'min-w-[70px]', 'temp')}
                     {isPropertyVisible('h_bar') && renderColHeader('h_bar', 'h̄', 'kJ/kmol', 'min-w-[90px]')}
                     {isPropertyVisible('u_bar') && renderColHeader('u_bar', 'ū', 'kJ/kmol', 'min-w-[90px]')}
                     {isPropertyVisible('s_bar_deg') && renderColHeader('s_bar_deg', 's̄°', 'kJ/kmol·K', 'min-w-[90px]')}
+                    {renderCollapsedPropertyHeaders()}
                   </tr>
                 </thead>
                 <tbody>
@@ -2102,38 +2606,36 @@ export default function App() {
                     const isPinned = pinnedRows.has(rKey);
                     const isHighlighted = highlightedRowIndex === rKey;
                     const isHovered = hoveredRow === rKey;
-                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tempUnit === 'C' ? '°C' : 'K'}`;
+                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tUnitLabel}`;
                     return (
-                      <tr 
-                        key={idx}
-                        data-row-key={rKey}
-                        ref={el => { rowRefs.current[rKey] = el; }}
-                        className="transition-colors bg-white dark:bg-gray-900"
-                      >
-                        <td
-                          data-pin-cell="true"
-                          onClick={() => togglePin(rKey)}
-                          className={cn(
-                            "w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 py-1.5 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer",
-                            isPinned ? "bg-amber-100 dark:bg-[#332818]" : (isHovered ? "bg-red-50 dark:bg-gray-800" : "bg-white dark:bg-gray-900"),
-                            isHighlighted && "bg-indigo-200 dark:bg-[#23254b] ring-1 ring-indigo-400 z-20"
-                          )}
-                          title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
+                      <React.Fragment key={idx}>
+                        <tr
+                          data-row-key={rKey}
+                          ref={el => { rowRefs.current[rKey] = el; }}
+                          className="transition-colors bg-white dark:bg-gray-900"
                         >
-                          <button 
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
-                            className={cn("p-1 rounded cursor-pointer transition-colors", isPinned ? "text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30" : "text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300")}
-                            title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
-                          >
-                            <Highlighter className="w-3.5 h-3.5" />
-                          </button>
-                        </td>
-                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
-                        {isPropertyVisible('h_bar') && <Td colId="h_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_bar'} isColSelected={selectedCols.has('h_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_bar.s}</Td>}
-                        {isPropertyVisible('u_bar') && <Td colId="u_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u_bar'} isColSelected={selectedCols.has('u_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u_bar.s}</Td>}
-                        {isPropertyVisible('s_bar_deg') && <Td colId="s_bar_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_bar_deg'} isColSelected={selectedCols.has('s_bar_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_bar_deg.s}</Td>}
-                      </tr>
+                          {renderProgressivePinCell(
+                            () => togglePin(rKey),
+                            isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`,
+                            isPinned,
+                            isHighlighted,
+                            isHovered,
+                            idx < tableData.rows.length - 1,
+                            () => handleAddInterpolatedRow({
+                              afterIndex: idx,
+                              dominatingColId: 'T',
+                              inputValue: '',
+                            }),
+                            true
+                          )}
+                          <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T)}</Td>
+                          {isPropertyVisible('h_bar') && <Td colId="h_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_bar'} isColSelected={selectedCols.has('h_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_bar.s}</Td>}
+                          {isPropertyVisible('u_bar') && <Td colId="u_bar" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'u_bar'} isColSelected={selectedCols.has('u_bar')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.u_bar.s}</Td>}
+                          {isPropertyVisible('s_bar_deg') && <Td colId="s_bar_deg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 's_bar_deg'} isColSelected={selectedCols.has('s_bar_deg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.s_bar_deg.s}</Td>}
+                          {renderCollapsedPropertyCells(idx, tableData.rows.length + countInterpTrs(tableData.rows.length))}
+                        </tr>
+                        {renderInterpRowsAfter(idx, molarVisibleCols, collapsedPropertyColumns.length > 0)}
+                      </React.Fragment>
                     );
                   })}
                 </tbody>
@@ -2147,12 +2649,13 @@ export default function App() {
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('substance', 'Substance', '', 'min-w-[160px]')}
-                    {renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
-                    {renderColHeader('M', 'Molar Mass, M', 'kg/kmol', 'min-w-[120px]')}
-                    {renderColHeader('R', 'Gas Const., R', 'kJ/kg·K', 'min-w-[120px]')}
-                    {renderColHeader('T_cr', 'Crit. Temp., T_cr', tempUnit === 'C' ? '°C' : 'K', 'min-w-[130px]', 'temp')}
-                    {renderColHeader('P_cr', 'Crit. Press., P_cr', pressUnit, 'min-w-[130px]', 'press')}
-                    {renderColHeader('v_cr', 'Crit. Vol., v_cr', 'm³/kmol', 'min-w-[130px]')}
+                    {isPropertyVisible('formula') && renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
+                    {isPropertyVisible('M') && renderColHeader('M', 'Molar Mass, M', 'kg/kmol', 'min-w-[120px]')}
+                    {isPropertyVisible('R') && renderColHeader('R', 'Gas Const., R', 'kJ/kg·K', 'min-w-[120px]')}
+                    {isPropertyVisible('T_cr') && renderColHeader('T_cr', 'Crit. Temp., T_cr', tempUnit === 'C' ? '°C' : 'K', 'min-w-[130px]', 'temp')}
+                    {isPropertyVisible('P_cr') && renderColHeader('P_cr', 'Crit. Press., P_cr', pressUnit, 'min-w-[130px]', 'press')}
+                    {isPropertyVisible('v_cr') && renderColHeader('v_cr', 'Crit. Vol., v_cr', 'm³/kmol', 'min-w-[130px]')}
+                    {renderCollapsedPropertyHeaders()}
                   </tr>
                 </thead>
                 <tbody>
@@ -2188,12 +2691,13 @@ export default function App() {
                           </button>
                         </td>
                         <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
-                        <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>
-                        <Td colId="M" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'M'} isColSelected={selectedCols.has('M')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.M.s}</Td>
-                        <Td colId="R" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'R'} isColSelected={selectedCols.has('R')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.R.s}</Td>
-                        <Td colId="T_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_cr'} isColSelected={selectedCols.has('T_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T_cr)}</Td>
-                        <Td colId="P_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'P_cr'} isColSelected={selectedCols.has('P_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatPressFromMPaDisplay(row.P_cr)}</Td>
-                        <Td colId="v_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v_cr'} isColSelected={selectedCols.has('v_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v_cr ? row.v_cr.s : '—'}</Td>
+                        {isPropertyVisible('formula') && <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>}
+                        {isPropertyVisible('M') && <Td colId="M" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'M'} isColSelected={selectedCols.has('M')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.M.s}</Td>}
+                        {isPropertyVisible('R') && <Td colId="R" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'R'} isColSelected={selectedCols.has('R')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.R.s}</Td>}
+                        {isPropertyVisible('T_cr') && <Td colId="T_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_cr'} isColSelected={selectedCols.has('T_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempFromKDisplay(row.T_cr)}</Td>}
+                        {isPropertyVisible('P_cr') && <Td colId="P_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'P_cr'} isColSelected={selectedCols.has('P_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatPressFromMPaDisplay(row.P_cr)}</Td>}
+                        {isPropertyVisible('v_cr') && <Td colId="v_cr" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'v_cr'} isColSelected={selectedCols.has('v_cr')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.v_cr ? row.v_cr.s : '—'}</Td>}
+                        {renderCollapsedPropertyCells(idx, tableData.rows.length)}
                       </tr>
                     );
                   })}
@@ -2208,11 +2712,12 @@ export default function App() {
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('substance', 'Gas', '', 'min-w-[160px]')}
-                    {renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
-                    {renderColHeader('R', 'Gas Const., R', 'kJ/kg·K', 'min-w-[120px]')}
-                    {renderColHeader('cp', 'cp', 'kJ/kg·K', 'min-w-[110px]')}
-                    {renderColHeader('cv', 'cv', 'kJ/kg·K', 'min-w-[110px]')}
-                    {renderColHeader('k', 'k', '', 'min-w-[90px]')}
+                    {isPropertyVisible('formula') && renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
+                    {isPropertyVisible('R') && renderColHeader('R', 'Gas Const., R', 'kJ/kg·K', 'min-w-[120px]')}
+                    {isPropertyVisible('cp') && renderColHeader('cp', 'cp', 'kJ/kg·K', 'min-w-[110px]')}
+                    {isPropertyVisible('cv') && renderColHeader('cv', 'cv', 'kJ/kg·K', 'min-w-[110px]')}
+                    {isPropertyVisible('k') && renderColHeader('k', 'k', '', 'min-w-[90px]')}
+                    {renderCollapsedPropertyHeaders()}
                   </tr>
                 </thead>
                 <tbody>
@@ -2248,11 +2753,12 @@ export default function App() {
                           </button>
                         </td>
                         <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
-                        <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>
-                        <Td colId="R" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'R'} isColSelected={selectedCols.has('R')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.R.s}</Td>
-                        <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>
-                        <Td colId="cv" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cv'} isColSelected={selectedCols.has('cv')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cv.s}</Td>
-                        <Td colId="k" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'k'} isColSelected={selectedCols.has('k')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.k.s}</Td>
+                        {isPropertyVisible('formula') && <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>}
+                        {isPropertyVisible('R') && <Td colId="R" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'R'} isColSelected={selectedCols.has('R')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.R.s}</Td>}
+                        {isPropertyVisible('cp') && <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>}
+                        {isPropertyVisible('cv') && <Td colId="cv" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cv'} isColSelected={selectedCols.has('cv')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cv.s}</Td>}
+                        {isPropertyVisible('k') && <Td colId="k" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'k'} isColSelected={selectedCols.has('k')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.k.s}</Td>}
+                        {renderCollapsedPropertyCells(idx, tableData.rows.length)}
                       </tr>
                     );
                   })}
@@ -2265,7 +2771,7 @@ export default function App() {
               <table className="min-w-full border-collapse border-spacing-0 text-left" onMouseLeave={clearAllHover}>
                 <thead>
                   <tr>
-                    <th rowSpan={2} className="w-10 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-40 h-14"></th>
+                    <th rowSpan={2} className="w-14 min-w-[56px] bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-40 h-14"></th>
                     <th
                       rowSpan={2}
                       data-col-id="T"
@@ -2386,38 +2892,27 @@ export default function App() {
                     const isPinned = pinnedRows.has(rKey);
                     const isHighlighted = highlightedRowIndex === rKey;
                     const isHovered = hoveredRow === rKey;
-                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tempUnit === 'C' ? '°C' : 'K'}`;
+                    const tLabel = `${formatTempFromKDisplay(row.T)} ${tUnitLabel}`;
                     return (
-                      <tr
-                        key={idx}
-                        data-row-key={rKey}
-                        ref={el => { rowRefs.current[rKey] = el; }}
-                        className="transition-colors bg-white dark:bg-gray-900"
-                      >
-                        <td
-                          data-pin-cell="true"
-                          onClick={() => togglePin(rKey)}
-                          className={cn(
-                            'px-2 py-2 border-b border-gray-100 dark:border-gray-800 sticky left-0 z-10 flex items-center justify-center transition-colors cursor-pointer',
-                            isPinned ? 'bg-amber-100 dark:bg-[#332818]' : isHovered ? 'bg-red-50 dark:bg-gray-800' : 'bg-white dark:bg-gray-900',
-                            isHighlighted && 'bg-indigo-200 dark:bg-[#23254b] border-indigo-200 dark:border-indigo-700 ring-1 ring-indigo-400 z-20'
-                          )}
-                          title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
+                      <React.Fragment key={idx}>
+                        <tr
+                          data-row-key={rKey}
+                          ref={el => { rowRefs.current[rKey] = el; }}
+                          className="transition-colors bg-white dark:bg-gray-900"
                         >
-                          <button
-                            type="button"
-                            onClick={(e) => { e.stopPropagation(); togglePin(rKey); }}
-                            className={cn(
-                              'p-1.5 rounded transition-colors cursor-pointer',
-                              isPinned
-                                ? 'text-amber-700 bg-amber-200/90 dark:text-amber-300 dark:bg-amber-500/30 shadow-sm'
-                                : 'text-gray-300 dark:text-gray-600 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'
-                            )}
-                            title={isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`}
-                          >
-                            <Highlighter className="w-4 h-4" />
-                          </button>
-                        </td>
+                          {renderProgressivePinCell(
+                            () => togglePin(rKey),
+                            isPinned ? `Unpin T = ${tLabel}` : `Highlight T = ${tLabel}`,
+                            isPinned,
+                            isHighlighted,
+                            isHovered,
+                            idx < tableData.rows.length - 1,
+                            () => handleAddInterpolatedRow({
+                              afterIndex: idx,
+                              dominatingColId: 'T',
+                              inputValue: '',
+                            })
+                          )}
 
                         <Td
                           colId="T"
@@ -2464,13 +2959,15 @@ export default function App() {
                           collapsedA2bGases.map((g) => (
                             <td
                               key={g.id}
-                              rowSpan={tableData.rows.length}
+                              rowSpan={tableData.rows.length + countInterpTrs(tableData.rows.length)}
                               className="bg-gray-50 dark:bg-gray-900 border-l-2 border-l-gray-300 dark:border-l-gray-700 border-b-0 p-0"
                             />
                           ))}
                       </tr>
-                    );
-                  })}
+                      {renderInterpRowsAfter(idx, a2bVisibleCols, true)}
+                    </React.Fragment>
+                  );
+                })}
                 </tbody>
               </table>
             )}
@@ -2482,14 +2979,15 @@ export default function App() {
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('substance', 'Substance', '', 'min-w-[160px]')}
-                    {renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
-                    {renderColHeader('a', 'a', '', 'min-w-[90px]')}
-                    {renderColHeader('b', 'b', '', 'min-w-[100px]')}
-                    {renderColHeader('c', 'c', '', 'min-w-[100px]')}
-                    {renderColHeader('d', 'd', '', 'min-w-[100px]')}
-                    {renderColHeader('tempRange', 'Temp. Range', tempUnit === 'C' ? '°C' : 'K', 'min-w-[140px]', 'temp')}
-                    {renderColHeader('errorMax', 'Max. Error', '%', 'min-w-[100px]')}
-                    {renderColHeader('errorAvg', 'Avg. Error', '%', 'min-w-[100px]')}
+                    {isPropertyVisible('formula') && renderColHeader('formula', 'Formula', '', 'min-w-[90px]')}
+                    {isPropertyVisible('a') && renderColHeader('a', 'a', '', 'min-w-[90px]')}
+                    {isPropertyVisible('b') && renderColHeader('b', 'b', '', 'min-w-[100px]')}
+                    {isPropertyVisible('c') && renderColHeader('c', 'c', '', 'min-w-[100px]')}
+                    {isPropertyVisible('d') && renderColHeader('d', 'd', '', 'min-w-[100px]')}
+                    {isPropertyVisible('tempRange') && renderColHeader('tempRange', 'Temp. Range', tempUnit === 'C' ? '°C' : 'K', 'min-w-[140px]', 'temp')}
+                    {isPropertyVisible('errorMax') && renderColHeader('errorMax', 'Max. Error', '%', 'min-w-[100px]')}
+                    {isPropertyVisible('errorAvg') && renderColHeader('errorAvg', 'Avg. Error', '%', 'min-w-[100px]')}
+                    {renderCollapsedPropertyHeaders()}
                   </tr>
                 </thead>
                 <tbody>
@@ -2525,14 +3023,15 @@ export default function App() {
                           </button>
                         </td>
                         <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
-                        <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>
-                        <Td colId="a" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'a'} isColSelected={selectedCols.has('a')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.a.s}</Td>
-                        <Td colId="b" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'b'} isColSelected={selectedCols.has('b')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.b.s}</Td>
-                        <Td colId="c" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'c'} isColSelected={selectedCols.has('c')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.c.s}</Td>
-                        <Td colId="d" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'd'} isColSelected={selectedCols.has('d')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.d.s}</Td>
-                        <Td colId="tempRange" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'tempRange'} isColSelected={selectedCols.has('tempRange')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{`${formatTempFromKDisplay(row.T_min)}–${formatTempFromKDisplay(row.T_max)}`}</Td>
-                        <Td colId="errorMax" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'errorMax'} isColSelected={selectedCols.has('errorMax')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.errorMax.s}</Td>
-                        <Td colId="errorAvg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'errorAvg'} isColSelected={selectedCols.has('errorAvg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.errorAvg.s}</Td>
+                        {isPropertyVisible('formula') && <Td colId="formula" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'formula'} isColSelected={selectedCols.has('formula')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.formula}</Td>}
+                        {isPropertyVisible('a') && <Td colId="a" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'a'} isColSelected={selectedCols.has('a')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.a.s}</Td>}
+                        {isPropertyVisible('b') && <Td colId="b" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'b'} isColSelected={selectedCols.has('b')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.b.s}</Td>}
+                        {isPropertyVisible('c') && <Td colId="c" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'c'} isColSelected={selectedCols.has('c')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.c.s}</Td>}
+                        {isPropertyVisible('d') && <Td colId="d" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'd'} isColSelected={selectedCols.has('d')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.d.s}</Td>}
+                        {isPropertyVisible('tempRange') && <Td colId="tempRange" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'tempRange'} isColSelected={selectedCols.has('tempRange')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{`${formatTempFromKDisplay(row.T_min)}–${formatTempFromKDisplay(row.T_max)}`}</Td>}
+                        {isPropertyVisible('errorMax') && <Td colId="errorMax" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'errorMax'} isColSelected={selectedCols.has('errorMax')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.errorMax.s}</Td>}
+                        {isPropertyVisible('errorAvg') && <Td colId="errorAvg" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'errorAvg'} isColSelected={selectedCols.has('errorAvg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.errorAvg.s}</Td>}
+                        {renderCollapsedPropertyCells(idx, tableData.rows.length)}
                       </tr>
                     );
                   })}
@@ -2547,117 +3046,157 @@ export default function App() {
                   <tr>
                     <th rowSpan={2} className="w-10 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-40 h-14"></th>
                     {renderColHeader('substance', 'Substance', '', 'min-w-[160px] border-r-2 border-r-gray-300 dark:border-r-gray-700', undefined, 2)}
-                    <th colSpan={2} className="px-2 py-2 text-xs md:text-sm font-semibold text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-20 h-12">
-                      Boiling Data at 1 atm
-                    </th>
-                    <th colSpan={2} className="px-2 py-2 text-xs md:text-sm font-semibold text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-20 h-12">
-                      Freezing Data
-                    </th>
-                    <th colSpan={3} className="px-2 py-2 text-xs md:text-sm font-semibold text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-20 h-12">
-                      Liquid Properties
-                    </th>
+                    {activeLiquidGroups.map(g => (
+                      <th
+                        key={g.id}
+                        colSpan={g.cols.length}
+                        className="px-2 py-2 text-xs md:text-sm font-semibold text-center text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 border-r-2 border-r-gray-300 dark:border-r-gray-700 sticky top-0 z-20 h-12 whitespace-nowrap"
+                      >
+                        <div className="flex items-center justify-center h-full">
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={true}
+                              onChange={() => togglePropertyVisibility(g.id)}
+                              className="rounded border-gray-300 dark:border-gray-600 text-[#c13726] dark:text-red-500 focus:ring-[#c13726] dark:focus:ring-red-500 dark:bg-gray-800 cursor-pointer"
+                            />
+                            <span>{g.label}</span>
+                          </label>
+                        </div>
+                      </th>
+                    ))}
+                    {collapsedLiquidGroups.length > 0 && (
+                      <th rowSpan={2} className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 z-10 w-full" />
+                    )}
+                    {collapsedLiquidGroups.map(g => (
+                      <th
+                        key={g.id}
+                        rowSpan={2}
+                        className="w-9 sm:w-10 bg-gray-100 hover:bg-gray-200 dark:bg-gray-900 dark:hover:bg-gray-800 border-b border-gray-200 dark:border-gray-800 border-l-2 border-l-gray-300 dark:border-l-gray-700 sticky top-0 z-20 transition-colors cursor-pointer"
+                        onClick={() => togglePropertyVisibility(g.id)}
+                        title={`Expand ${g.label}`}
+                      >
+                        <div className="h-full flex items-center justify-center py-2">
+                          <span className="[writing-mode:vertical-rl] text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wider select-none">
+                            {g.label}
+                          </span>
+                        </div>
+                      </th>
+                    ))}
                   </tr>
                   <tr>
-                    <SubHeader
-                      label="Normal Boiling Point"
-                      prop="T_boil"
-                      colId="T_boil"
-                      isCategoryEnd={false}
-                      isHovered={hoveredCol === 'T_boil'}
-                      isSelected={selectedCols.has('T_boil')}
-                      onToggleHighlight={toggleColumnHighlight}
-                      onMouseEnterCol={handleMouseEnterCol}
-                      onMouseLeaveCol={handleMouseLeaveCol}
-                      onShowTooltip={showTooltip}
-                      onHideTooltip={hideTooltip}
-                      unitType="temp"
-                      tempUnit={tempUnit}
-                      onChangeTempUnit={setTempUnit}
-                    />
-                    <SubHeader
-                      label="h_fg (kJ/kg)"
-                      prop="h_fg"
-                      colId="h_fg"
-                      isCategoryEnd={true}
-                      isHovered={hoveredCol === 'h_fg'}
-                      isSelected={selectedCols.has('h_fg')}
-                      onToggleHighlight={toggleColumnHighlight}
-                      onMouseEnterCol={handleMouseEnterCol}
-                      onMouseLeaveCol={handleMouseLeaveCol}
-                      onShowTooltip={showTooltip}
-                      onHideTooltip={hideTooltip}
-                    />
-                    <SubHeader
-                      label="Freezing Point"
-                      prop="T_freeze"
-                      colId="T_freeze"
-                      isCategoryEnd={false}
-                      isHovered={hoveredCol === 'T_freeze'}
-                      isSelected={selectedCols.has('T_freeze')}
-                      onToggleHighlight={toggleColumnHighlight}
-                      onMouseEnterCol={handleMouseEnterCol}
-                      onMouseLeaveCol={handleMouseLeaveCol}
-                      onShowTooltip={showTooltip}
-                      onHideTooltip={hideTooltip}
-                      unitType="temp"
-                      tempUnit={tempUnit}
-                      onChangeTempUnit={setTempUnit}
-                    />
-                    <SubHeader
-                      label="h_if (kJ/kg)"
-                      prop="h_if"
-                      colId="h_if"
-                      isCategoryEnd={true}
-                      isHovered={hoveredCol === 'h_if'}
-                      isSelected={selectedCols.has('h_if')}
-                      onToggleHighlight={toggleColumnHighlight}
-                      onMouseEnterCol={handleMouseEnterCol}
-                      onMouseLeaveCol={handleMouseLeaveCol}
-                      onShowTooltip={showTooltip}
-                      onHideTooltip={hideTooltip}
-                    />
-                    <SubHeader
-                      label="Temp."
-                      prop="T_liq"
-                      colId="T_liq"
-                      isCategoryEnd={false}
-                      isHovered={hoveredCol === 'T_liq'}
-                      isSelected={selectedCols.has('T_liq')}
-                      onToggleHighlight={toggleColumnHighlight}
-                      onMouseEnterCol={handleMouseEnterCol}
-                      onMouseLeaveCol={handleMouseLeaveCol}
-                      onShowTooltip={showTooltip}
-                      onHideTooltip={hideTooltip}
-                      unitType="temp"
-                      tempUnit={tempUnit}
-                      onChangeTempUnit={setTempUnit}
-                    />
-                    <SubHeader
-                      label="Density, ρ (kg/m³)"
-                      prop="rho"
-                      colId="rho"
-                      isCategoryEnd={false}
-                      isHovered={hoveredCol === 'rho'}
-                      isSelected={selectedCols.has('rho')}
-                      onToggleHighlight={toggleColumnHighlight}
-                      onMouseEnterCol={handleMouseEnterCol}
-                      onMouseLeaveCol={handleMouseLeaveCol}
-                      onShowTooltip={showTooltip}
-                      onHideTooltip={hideTooltip}
-                    />
-                    <SubHeader
-                      label="cp (kJ/kg·K)"
-                      prop="cp"
-                      colId="cp"
-                      isCategoryEnd={false}
-                      isHovered={hoveredCol === 'cp'}
-                      isSelected={selectedCols.has('cp')}
-                      onToggleHighlight={toggleColumnHighlight}
-                      onMouseEnterCol={handleMouseEnterCol}
-                      onMouseLeaveCol={handleMouseLeaveCol}
-                      onShowTooltip={showTooltip}
-                      onHideTooltip={hideTooltip}
-                    />
+                    {isPropertyVisible('liq_boil') && (
+                      <>
+                        <SubHeader
+                          label="Normal Boiling Point"
+                          prop="T_boil"
+                          colId="T_boil"
+                          isCategoryEnd={false}
+                          isHovered={hoveredCol === 'T_boil'}
+                          isSelected={selectedCols.has('T_boil')}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                          unitType="temp"
+                          tempUnit={tempUnit}
+                          onChangeTempUnit={setTempUnit}
+                        />
+                        <SubHeader
+                          label="h_fg (kJ/kg)"
+                          prop="h_fg"
+                          colId="h_fg"
+                          isCategoryEnd={true}
+                          isHovered={hoveredCol === 'h_fg'}
+                          isSelected={selectedCols.has('h_fg')}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                        />
+                      </>
+                    )}
+                    {isPropertyVisible('liq_freeze') && (
+                      <>
+                        <SubHeader
+                          label="Freezing Point"
+                          prop="T_freeze"
+                          colId="T_freeze"
+                          isCategoryEnd={false}
+                          isHovered={hoveredCol === 'T_freeze'}
+                          isSelected={selectedCols.has('T_freeze')}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                          unitType="temp"
+                          tempUnit={tempUnit}
+                          onChangeTempUnit={setTempUnit}
+                        />
+                        <SubHeader
+                          label="h_if (kJ/kg)"
+                          prop="h_if"
+                          colId="h_if"
+                          isCategoryEnd={true}
+                          isHovered={hoveredCol === 'h_if'}
+                          isSelected={selectedCols.has('h_if')}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                        />
+                      </>
+                    )}
+                    {isPropertyVisible('liq_props') && (
+                      <>
+                        <SubHeader
+                          label="Temp."
+                          prop="T_liq"
+                          colId="T_liq"
+                          isCategoryEnd={false}
+                          isHovered={hoveredCol === 'T_liq'}
+                          isSelected={selectedCols.has('T_liq')}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                          unitType="temp"
+                          tempUnit={tempUnit}
+                          onChangeTempUnit={setTempUnit}
+                        />
+                        <SubHeader
+                          label="Density, ρ (kg/m³)"
+                          prop="rho"
+                          colId="rho"
+                          isCategoryEnd={false}
+                          isHovered={hoveredCol === 'rho'}
+                          isSelected={selectedCols.has('rho')}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                        />
+                        <SubHeader
+                          label="cp (kJ/kg·K)"
+                          prop="cp"
+                          colId="cp"
+                          isCategoryEnd={true}
+                          isHovered={hoveredCol === 'cp'}
+                          isSelected={selectedCols.has('cp')}
+                          onToggleHighlight={toggleColumnHighlight}
+                          onMouseEnterCol={handleMouseEnterCol}
+                          onMouseLeaveCol={handleMouseLeaveCol}
+                          onShowTooltip={showTooltip}
+                          onHideTooltip={hideTooltip}
+                        />
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -2698,13 +3237,38 @@ export default function App() {
                           </button>
                         </td>
                         <Td colId="substance" align="left" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
-                        <Td colId="T_boil" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_boil'} isColSelected={selectedCols.has('T_boil')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatLiquidBoilTemp(row)}</Td>
-                        <Td colId="h_fg" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_fg'} isColSelected={selectedCols.has('h_fg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatLiquidHfg(row)}</Td>
-                        <Td colId="T_freeze" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_freeze'} isColSelected={selectedCols.has('T_freeze')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.T_freeze ? formatTempDisplay(row.T_freeze) : '—'}</Td>
-                        <Td colId="h_if" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_if'} isColSelected={selectedCols.has('h_if')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_if ? row.h_if.s : '—'}</Td>
-                        <Td colId="T_liq" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_liq'} isColSelected={selectedCols.has('T_liq')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempDisplay(row.T_liq)}</Td>
-                        <Td colId="rho" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'rho'} isColSelected={selectedCols.has('rho')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.rho.s}</Td>
-                        <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>
+                        {isPropertyVisible('liq_boil') && (
+                          <>
+                            <Td colId="T_boil" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_boil'} isColSelected={selectedCols.has('T_boil')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatLiquidBoilTemp(row)}</Td>
+                            <Td colId="h_fg" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_fg'} isColSelected={selectedCols.has('h_fg')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatLiquidHfg(row)}</Td>
+                          </>
+                        )}
+                        {isPropertyVisible('liq_freeze') && (
+                          <>
+                            <Td colId="T_freeze" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_freeze'} isColSelected={selectedCols.has('T_freeze')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.T_freeze ? formatTempDisplay(row.T_freeze) : '—'}</Td>
+                            <Td colId="h_if" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_if'} isColSelected={selectedCols.has('h_if')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_if ? row.h_if.s : '—'}</Td>
+                          </>
+                        )}
+                        {isPropertyVisible('liq_props') && (
+                          <>
+                            <Td colId="T_liq" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_liq'} isColSelected={selectedCols.has('T_liq')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempDisplay(row.T_liq)}</Td>
+                            <Td colId="rho" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'rho'} isColSelected={selectedCols.has('rho')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.rho.s}</Td>
+                            <Td colId="cp" isCategoryEnd={true} isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>
+                          </>
+                        )}
+                        {collapsedLiquidGroups.length > 0 && (
+                          <td className="bg-white dark:bg-gray-900 border-b border-gray-100 dark:border-gray-800 p-0" />
+                        )}
+                        {idx === 0 &&
+                          collapsedLiquidGroups.map(g => (
+                            <td
+                              key={g.id}
+                              rowSpan={tableData.rows.length}
+                              onClick={() => togglePropertyVisibility(g.id)}
+                              title={`Expand ${g.label}`}
+                              className="bg-gray-50 hover:bg-gray-100 dark:bg-gray-900 dark:hover:bg-gray-800/80 border-l-2 border-l-gray-300 dark:border-l-gray-700 border-b-0 p-0 cursor-pointer transition-colors"
+                            />
+                          ))}
                       </tr>
                     );
                   })}
@@ -2718,11 +3282,12 @@ export default function App() {
                 <thead>
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
-                    {renderColHeader('category', 'Category', '', 'min-w-[110px]')}
+                    {isPropertyVisible('category') && renderColHeader('category', 'Category', '', 'min-w-[110px]')}
                     {renderColHeader('substance', 'Substance', '', 'min-w-[200px]')}
-                    {renderColHeader('T', 'Temp.', tempUnit === 'C' ? '°C' : 'K', 'min-w-[110px]', 'temp')}
-                    {renderColHeader('rho', 'Density, ρ', 'kg/m³', 'min-w-[120px]')}
-                    {renderColHeader('cp', 'Specific Heat, cp', 'kJ/kg·K', 'min-w-[130px]')}
+                    {isPropertyVisible('T') && renderColHeader('T', 'Temp.', tempUnit === 'C' ? '°C' : 'K', 'min-w-[110px]', 'temp')}
+                    {isPropertyVisible('rho') && renderColHeader('rho', 'Density, ρ', 'kg/m³', 'min-w-[120px]')}
+                    {isPropertyVisible('cp') && renderColHeader('cp', 'Specific Heat, cp', 'kJ/kg·K', 'min-w-[130px]')}
+                    {renderCollapsedPropertyHeaders()}
                   </tr>
                 </thead>
                 <tbody>
@@ -2757,11 +3322,12 @@ export default function App() {
                             <Highlighter className="w-3.5 h-3.5" />
                           </button>
                         </td>
-                        <Td colId="category" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'category'} isColSelected={selectedCols.has('category')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.category}</Td>
+                        {isPropertyVisible('category') && <Td colId="category" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'category'} isColSelected={selectedCols.has('category')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.category}</Td>}
                         <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
-                        <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatSolidTemp(row)}</Td>
-                        <Td colId="rho" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'rho'} isColSelected={selectedCols.has('rho')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.rho ? row.rho.s : '—'}</Td>
-                        <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>
+                        {isPropertyVisible('T') && <Td colId="T" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T'} isColSelected={selectedCols.has('T')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatSolidTemp(row)}</Td>}
+                        {isPropertyVisible('rho') && <Td colId="rho" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'rho'} isColSelected={selectedCols.has('rho')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.rho ? row.rho.s : '—'}</Td>}
+                        {isPropertyVisible('cp') && <Td colId="cp" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp'} isColSelected={selectedCols.has('cp')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp.s}</Td>}
+                        {renderCollapsedPropertyCells(idx, tableData.rows.length)}
                       </tr>
                     );
                   })}
@@ -2776,11 +3342,12 @@ export default function App() {
                   <tr className="bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
                     <th className="w-8 sm:w-9 min-w-[32px] sm:min-w-[36px] px-1 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800 sticky top-0 left-0 z-30 h-12 sm:h-14"></th>
                     {renderColHeader('substance', 'Food', '', 'min-w-[160px]')}
-                    {renderColHeader('waterContent', 'Water Content', '% (mass)', 'min-w-[120px]')}
-                    {renderColHeader('T_freeze', 'Freezing Point', tempUnit === 'C' ? '°C' : 'K', 'min-w-[130px]', 'temp')}
-                    {renderColHeader('cp_above', 'cp Above Freezing', 'kJ/kg·K', 'min-w-[140px]')}
-                    {renderColHeader('cp_below', 'cp Below Freezing', 'kJ/kg·K', 'min-w-[140px]')}
-                    {renderColHeader('h_if', 'Latent Heat of Fusion, h_if', 'kJ/kg', 'min-w-[160px]')}
+                    {isPropertyVisible('waterContent') && renderColHeader('waterContent', 'Water Content', '% (mass)', 'min-w-[120px]')}
+                    {isPropertyVisible('T_freeze') && renderColHeader('T_freeze', 'Freezing Point', tempUnit === 'C' ? '°C' : 'K', 'min-w-[130px]', 'temp')}
+                    {isPropertyVisible('cp_above') && renderColHeader('cp_above', 'cp Above Freezing', 'kJ/kg·K', 'min-w-[140px]')}
+                    {isPropertyVisible('cp_below') && renderColHeader('cp_below', 'cp Below Freezing', 'kJ/kg·K', 'min-w-[140px]')}
+                    {isPropertyVisible('h_if') && renderColHeader('h_if', 'Latent Heat of Fusion, h_if', 'kJ/kg', 'min-w-[160px]')}
+                    {renderCollapsedPropertyHeaders()}
                   </tr>
                 </thead>
                 <tbody>
@@ -2816,11 +3383,12 @@ export default function App() {
                           </button>
                         </td>
                         <Td colId="substance" align="left" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'substance'} isColSelected={selectedCols.has('substance')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.substance}</Td>
-                        <Td colId="waterContent" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'waterContent'} isColSelected={selectedCols.has('waterContent')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.waterContent.s}</Td>
-                        <Td colId="T_freeze" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_freeze'} isColSelected={selectedCols.has('T_freeze')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempDisplay(row.T_freeze)}</Td>
-                        <Td colId="cp_above" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp_above'} isColSelected={selectedCols.has('cp_above')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp_above ? row.cp_above.s : '—'}</Td>
-                        <Td colId="cp_below" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp_below'} isColSelected={selectedCols.has('cp_below')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp_below.s}</Td>
-                        <Td colId="h_if" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_if'} isColSelected={selectedCols.has('h_if')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_if.s}</Td>
+                        {isPropertyVisible('waterContent') && <Td colId="waterContent" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'waterContent'} isColSelected={selectedCols.has('waterContent')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.waterContent.s}</Td>}
+                        {isPropertyVisible('T_freeze') && <Td colId="T_freeze" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'T_freeze'} isColSelected={selectedCols.has('T_freeze')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{formatTempDisplay(row.T_freeze)}</Td>}
+                        {isPropertyVisible('cp_above') && <Td colId="cp_above" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp_above'} isColSelected={selectedCols.has('cp_above')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp_above ? row.cp_above.s : '—'}</Td>}
+                        {isPropertyVisible('cp_below') && <Td colId="cp_below" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'cp_below'} isColSelected={selectedCols.has('cp_below')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.cp_below.s}</Td>}
+                        {isPropertyVisible('h_if') && <Td colId="h_if" isRowHovered={isHovered} isPinned={isPinned} isHighlighted={isHighlighted} isColHovered={hoveredCol === 'h_if'} isColSelected={selectedCols.has('h_if')} onMouseEnterCol={handleMouseEnterCol} onMouseLeaveCol={handleMouseLeaveCol}>{row.h_if.s}</Td>}
+                        {renderCollapsedPropertyCells(idx, tableData.rows.length)}
                       </tr>
                     );
                   })}
